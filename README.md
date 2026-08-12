@@ -42,7 +42,7 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 `ModelProvider` is the stable inference boundary. The bundled `gemini-adk` adapter is selected with `MODEL_PROVIDER=gemini-adk`; a future provider implements the same structured-generation contract and is registered in the provider factory.
 
-See [local development](docs/local-development.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+See [local development](docs/local-development.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 

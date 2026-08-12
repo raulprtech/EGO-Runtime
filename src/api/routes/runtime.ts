@@ -8,6 +8,7 @@ import { MasteryStateSchema, PracticeSetSchema } from '../../domain/types';
 import { updateMasteryState } from '../../services/mastery';
 import { EventTracker } from '../../runtime/events';
 import { getRuntimeRepository } from '../../services/runtime_repository';
+import { isModelProviderConfigured } from '../../runtime/model_provider';
 
 const router = Router();
 
@@ -16,6 +17,7 @@ router.get('/capabilities', (_req, res) => res.json({
   version: '0.4.0',
   backend: process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local'),
   model_provider: process.env.MODEL_PROVIDER ?? 'gemini-adk',
+  model_configured: isModelProviderConfigured(),
   capabilities: [
     'education.study_plan', 'education.flashcards', 'education.quiz',
     'education.feynman', 'education.mastery', 'documents.pdf', 'documents.text', 'artifacts',

@@ -14,12 +14,17 @@ function isAlreadyExists(error: unknown): boolean {
 }
 
 export class TaskQueue {
+  private static readonly activeLocal = new Set<Promise<unknown>>();
+
   static async dispatch(request: ExecuteRequest): Promise<void> {
     if (backend() === 'local') {
-      setImmediate(() => {
-        void this.dispatchLocal(request).catch(error => {
-          console.error(`Local job ${request.request_id} failed`, error);
-        });
+      const task = new Promise<void>(resolve => setImmediate(resolve))
+        .then(() => this.dispatchLocal(request));
+      this.activeLocal.add(task);
+      void task.catch(error => {
+        console.error(`Local job ${request.request_id} failed`, error);
+      }).finally(() => {
+        this.activeLocal.delete(task);
       });
       return;
     }
@@ -58,5 +63,22 @@ export class TaskQueue {
     const pending = await getRuntimeRepository().recoverableJobs(100);
     for (const request of pending) await this.dispatch(request);
     return pending.length;
+  }
+
+  static activeLocalCount(): number {
+    return this.activeLocal.size;
+  }
+
+  static async drainLocal(timeoutMs: number): Promise<boolean> {
+    if (!this.activeLocal.size) return true;
+    let timer: NodeJS.Timeout | undefined;
+    const completed = Promise.allSettled([...this.activeLocal]).then(() => true);
+    const timedOut = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref();
+    });
+    const result = await Promise.race([completed, timedOut]);
+    if (timer) clearTimeout(timer);
+    return result;
   }
 }

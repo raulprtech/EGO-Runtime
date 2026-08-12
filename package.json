@@ -4,14 +4,15 @@
   "version": "0.4.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "node --import tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "demo": "node scripts/demo.js"
+    "demo": "node scripts/demo.js",
+    "smoke:model": "node --import tsx scripts/model-smoke.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",
