@@ -9,6 +9,7 @@ All endpoints except `capabilities` require the configured application token. A 
 - `GET /capabilities` — implemented runtime capabilities.
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /transcriptions` - transcribe one binary audio turn; see [audio transcription](audio-transcription.md).
+- `POST /speech` - synthesize one JSON text response into WAV or PCM; see [speech synthesis](speech-synthesis.md).
 - `POST /worker` — Cloud Tasks delivery endpoint.
 - `POST /maintenance/reconcile` — redispatch pending jobs whose initial dispatch failed.
 - `GET /:request_id` — sanitized public job state and artifact references.

@@ -14,14 +14,15 @@ const router = Router();
 
 router.get('/capabilities', (_req, res) => res.json({
   runtime: 'ego-runtime',
-  version: '0.5.0',
+  version: '0.6.0',
   backend: process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local'),
   model_provider: process.env.MODEL_PROVIDER ?? 'gemini-adk',
   model_configured: isModelProviderConfigured(),
   transcription_provider: process.env.TRANSCRIPTION_PROVIDER ?? 'gemini',
+  speech_synthesis_provider: process.env.SPEECH_SYNTHESIS_PROVIDER ?? 'gemini',
   capabilities: [
     'education.study_plan', 'education.flashcards', 'education.quiz',
-    'education.feynman', 'education.mastery', 'audio.transcription',
+    'education.feynman', 'education.mastery', 'audio.transcription', 'audio.synthesis',
     'documents.pdf', 'documents.text', 'artifacts',
   ],
 }));

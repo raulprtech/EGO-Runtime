@@ -7,6 +7,7 @@ import path from 'node:path';
 import cors from 'cors';
 import runtimeRoutes from './src/api/routes/runtime';
 import transcriptionRoutes from './src/api/routes/transcription';
+import speechRoutes from './src/api/routes/speech';
 import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
 import { TaskQueue } from './src/services/task_queue';
@@ -27,12 +28,19 @@ export async function createApp() {
   const app = express();
   const origins = (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean);
   app.disable('x-powered-by');
-  app.use(cors({ origin: origins.length ? origins : false }));
+  app.disable('etag');
+  app.use(cors({
+    origin: origins.length ? origins : false,
+    exposedHeaders: [
+      'X-Speech-Id', 'X-Speech-Provider', 'X-Audio-Sample-Rate',
+      'X-Audio-Channels', 'X-Audio-Duration-Ms',
+    ],
+  }));
   app.use(express.json({ limit: '256kb' }));
   app.get('/health', (_req, res) => res.json({
     status: 'ok',
     runtime: 'ego-runtime',
-    version: '0.5.0',
+    version: '0.6.0',
     protocol_version: protocolVersion,
     instance_id: instanceId,
     backend: backend(),
@@ -41,6 +49,7 @@ export async function createApp() {
     active_jobs: TaskQueue.activeLocalCount(),
   }));
   app.use('/v1/runtime/transcriptions', transcriptionRoutes);
+  app.use('/v1/runtime/speech', speechRoutes);
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });

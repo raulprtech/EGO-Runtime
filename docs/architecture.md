@@ -10,6 +10,9 @@ EGO is a local-first learning runtime invoked through a stable HTTP contract. Ex
 - **Model provider port:** schema-constrained structured generation.
   - `gemini-adk`: bundled hackathon adapter using Google ADK and Gemini.
   - Other providers can implement the same interface without changing agents or domain services.
+- **Speech synthesis provider port:** converts completed response text into WAV or raw PCM for immediate playback.
+  - `gemini`: bundled Gemini 3.1 Flash TTS Preview adapter.
+  - Output voice, language and performance style remain request-level options.
 - **Transcription provider port:** converts a completed binary audio turn into normalized text and timestamped segments.
   - `gemini`: bundled inline-audio adapter using the Gemini API.
   - Streaming speech recognition can use another adapter and a separately versioned transport.
