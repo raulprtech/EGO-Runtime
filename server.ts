@@ -6,6 +6,7 @@ import express from 'express';
 import path from 'node:path';
 import cors from 'cors';
 import runtimeRoutes from './src/api/routes/runtime';
+import transcriptionRoutes from './src/api/routes/transcription';
 import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
 import { TaskQueue } from './src/services/task_queue';
@@ -31,7 +32,7 @@ export async function createApp() {
   app.get('/health', (_req, res) => res.json({
     status: 'ok',
     runtime: 'ego-runtime',
-    version: '0.4.0',
+    version: '0.5.0',
     protocol_version: protocolVersion,
     instance_id: instanceId,
     backend: backend(),
@@ -39,6 +40,7 @@ export async function createApp() {
     model_configured: isModelProviderConfigured(),
     active_jobs: TaskQueue.activeLocalCount(),
   }));
+  app.use('/v1/runtime/transcriptions', transcriptionRoutes);
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
@@ -51,7 +53,8 @@ export async function createApp() {
   void TaskQueue.recoverPendingLocal().catch(error => console.error('Local recovery failed', error));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = error instanceof Error ? error.message : 'Internal error';
-    res.status(error instanceof ZodError ? 400 : 500).json({ error: message });
+    const tooLarge = typeof error === 'object' && error !== null && 'type' in error && error.type === 'entity.too.large';
+    res.status(tooLarge ? 413 : error instanceof ZodError ? 400 : 500).json({ error: message });
   });
   return app;
 }

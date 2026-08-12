@@ -7,4 +7,6 @@
 5. **Exclusive execution.** Local active-job ownership and cloud transactional leases prevent duplicate concurrent work.
 6. **Constrained artifact sources.** Local files must remain under `LOCAL_INPUT_ROOT`; cloud objects must come from allow-listed GCS buckets.
 7. **Separated learner and evaluator data.** Public practice artifacts omit answer keys; grading material remains private runtime state.
-8. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.
+8. **Turn-based audio boundary.** Version 0.5 accepts completed audio turns synchronously. Realtime streaming requires a separately versioned transport, while normalized transcription results remain provider-neutral.
+9. **Ephemeral transcription.** Raw audio and transcripts are not logged or persisted by the transcription endpoint.
+10. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.

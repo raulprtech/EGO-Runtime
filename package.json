@@ -1,7 +1,7 @@
 {
   "name": "ego-runtime",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "node --import tsx server.ts",
@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "demo": "node scripts/demo.js",
-    "smoke:model": "node --import tsx scripts/model-smoke.ts"
+    "smoke:model": "node --import tsx scripts/model-smoke.ts",
+    "smoke:transcription": "node --import tsx scripts/transcription-smoke.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",

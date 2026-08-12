@@ -13,9 +13,10 @@ Account-specific deployment topology and proprietary client or orchestration cod
 3. Generate a source-grounded concept map and mastery plan.
 4. Produce a focused session, Feynman prompt, flashcards and short-answer quiz.
 5. Persist artifacts, sequenced events and an initial mastery state.
-6. Grade later quiz responses and update confidence and review dates.
-7. Recover unfinished local jobs after process restarts.
-8. Support Cloud Tasks, Firestore leases and GCS when the cloud backend is selected.
+6. Transcribe completed voice turns through a provider-neutral audio endpoint.
+7. Grade later quiz responses and update confidence and review dates.
+8. Recover unfinished local jobs after process restarts.
+9. Support Cloud Tasks, Firestore leases and GCS when the cloud backend is selected.
 
 ## Run locally
 
@@ -40,9 +41,9 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 ## Provider extension
 
-`ModelProvider` is the stable inference boundary. The bundled `gemini-adk` adapter is selected with `MODEL_PROVIDER=gemini-adk`; a future provider implements the same structured-generation contract and is registered in the provider factory.
+`ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled hackathon adapters use Gemini, while future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
 
-See [local development](docs/local-development.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+See [local development](docs/local-development.md), [audio transcription](docs/audio-transcription.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 
@@ -50,7 +51,7 @@ EGO rejects arbitrary remote URLs, confines local inputs to a configured root, r
 
 ## Status
 
-Version 0.4 is a local-first hackathon vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.5 is a local-first, audio-capable hackathon vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 
