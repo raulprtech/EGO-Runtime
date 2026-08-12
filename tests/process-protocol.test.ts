@@ -30,7 +30,7 @@ describe('local process protocol', () => {
       protocol_version: 1,
       instance_id: runtime.instanceId,
       backend: 'local',
-      model_configured: false,
+      model_configured: Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
       active_jobs: 0,
     });
 

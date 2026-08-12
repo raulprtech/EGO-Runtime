@@ -13,6 +13,8 @@ export class GeminiAdkProvider implements ModelProvider {
       model: request.model ?? process.env.EGO_MODEL ?? process.env.EGO_FAST_MODEL ?? 'gemini-3.5-flash',
       instruction: request.instruction,
       outputSchema: request.schema as unknown as LlmAgentSchema,
+      disallowTransferToParent: true,
+      disallowTransferToPeers: true,
       includeContents: 'none',
       generateContentConfig: { temperature: 0.2 },
     });
