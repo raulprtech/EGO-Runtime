@@ -1,0 +1,6 @@
+{
+  "name": "EGO Runtime",
+  "description": "Educational agent runtime for generating structured study plans and concept maps from documents using Gemini and Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
