@@ -1,0 +1,65 @@
+[
+  {
+    "case_id": "eval_001",
+    "category": "simple_factual_tutoring",
+    "description": "User asks a direct, simple factual question without attachments.",
+    "input": {
+      "message": "¿Qué es backpropagation?",
+      "attachments": []
+    },
+    "expected_behavior": [
+      "Coordinator routes directly to TutorAgent.",
+      "Does NOT invoke PlannerAgent.",
+      "Returns a structured explanation artifact."
+    ]
+  },
+  {
+    "case_id": "eval_002",
+    "category": "complex_study_objective",
+    "description": "User provides multiple PDFs and asks for a study plan.",
+    "input": {
+      "message": "Tengo que entender estos papers sobre interpretabilidad y preparar una exposición para el viernes.",
+      "attachments": [
+        { "name": "attention_is_all_you_need.pdf", "mime_type": "application/pdf", "uri": "gs://bucket/doc1.pdf" },
+        { "name": "mechanistic_interpretability.pdf", "mime_type": "application/pdf", "uri": "gs://bucket/doc2.pdf" }
+      ]
+    },
+    "expected_behavior": [
+      "Validates GCS URIs and MIME types.",
+      "Invokes DocumentAnalyzerAgent to extract concepts.",
+      "Invokes PlannerAgent to generate a study_plan.json.",
+      "Emits sequence-ordered events during processing."
+    ]
+  },
+  {
+    "case_id": "eval_003",
+    "category": "critical_review",
+    "description": "User asks for a severe critique of an uploaded essay.",
+    "input": {
+      "message": "Critica este trabajo como si fueras un revisor académico exigente.",
+      "attachments": [
+        { "name": "my_thesis_draft.pdf", "mime_type": "application/pdf", "uri": "gs://bucket/draft.pdf" }
+      ]
+    },
+    "expected_behavior": [
+      "Coordinator routes to CriticAgent.",
+      "Produces critique.md artifact with strengths, weaknesses, and unsupported claims.",
+      "Maintains epistemological honesty (no hallucinated citations)."
+    ]
+  },
+  {
+    "case_id": "eval_004",
+    "category": "feynman_feedback",
+    "description": "User attempts to explain a concept in their own words.",
+    "input": {
+      "message": "Creo que la regresión lineal es solo dibujar una línea que toque todos los puntos posibles.",
+      "attachments": []
+    },
+    "expected_behavior": [
+      "Coordinator routes to FeynmanAgent.",
+      "Identifies the misconception (line does not touch all points, it minimizes error).",
+      "Returns a structured JSON evaluation (correct/incorrect/missing).",
+      "Prompts the user to try explaining again."
+    ]
+  }
+]
