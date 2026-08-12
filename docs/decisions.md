@@ -1,9 +1,10 @@
 # Architectural decisions
 
-1. **Official Google ADK for TypeScript.** Agent execution uses `@google/adk`; Zod validates every structured response.
-2. **Firestore durability.** Jobs, nested events, leases, attempts and mastery state are persisted outside disposable compute instances.
-3. **Cloud Tasks delivery.** Production rejects in-memory background execution. Named tasks make ambiguous dispatch retries idempotent.
-4. **Exclusive worker leases.** A transaction claims each job and prevents concurrent delivery from executing it twice.
-5. **GCS-only inputs.** Arbitrary HTTPS retrieval is rejected. Deployments control allowed buckets and service-account permissions.
-6. **Separated learner and evaluator data.** Public practice artifacts omit answer keys; grading material remains in an internal job subcollection.
-7. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.
+1. **Local-first execution.** Development and desktop use require only the runtime process, local storage and a configured model provider.
+2. **Model-provider port.** Agents request validated structured generation through a provider-neutral interface. Gemini+ADK is an adapter, not a domain dependency.
+3. **Dual persistence adapters.** Atomic JSON persistence supports one local runtime process; Firestore supports distributed cloud execution.
+4. **Backend-specific delivery.** Local work runs asynchronously in-process and is recovered on restart. Cloud work uses named Cloud Tasks.
+5. **Exclusive execution.** Local active-job ownership and cloud transactional leases prevent duplicate concurrent work.
+6. **Constrained artifact sources.** Local files must remain under `LOCAL_INPUT_ROOT`; cloud objects must come from allow-listed GCS buckets.
+7. **Separated learner and evaluator data.** Public practice artifacts omit answer keys; grading material remains private runtime state.
+8. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.

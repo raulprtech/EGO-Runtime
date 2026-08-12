@@ -1,25 +1,34 @@
 # Architecture
 
-EGO is a decoupled learning runtime invoked by an external orchestration layer and consumed through a separate client interface.
+EGO is a local-first learning runtime invoked through a stable HTTP contract. External orchestration and client layers are optional consumers, not runtime dependencies.
 
-## Components
+## Ports and adapters
 
-- **API:** validates contracts, enforces idempotency and exposes job, event, cancellation and assessment endpoints.
-- **Cloud Tasks adapter:** delivers durable asynchronous work. Failed dispatches remain recoverable through reconciliation.
-- **Job lifecycle:** obtains an exclusive Firestore lease before execution and renews it between stages.
-- **ADK agents:** analyze documents, plan study, design retrieval practice and grade assessments.
-- **Artifact store:** verifies GCS inputs and writes immutable generated artifacts.
-- **Learning state:** stores hidden answer keys, assessment attempts and evolving concept confidence separately from public job state.
+- **Runtime repository port:** jobs, events, leases, practice, attempts and mastery.
+  - `local`: atomic JSON state plus local artifacts.
+  - `cloud`: Firestore state with GCS artifacts.
+- **Model provider port:** schema-constrained structured generation.
+  - `gemini-adk`: bundled hackathon adapter using Google ADK and Gemini.
+  - Other providers can implement the same interface without changing agents or domain services.
+- **Work delivery:**
+  - `local`: in-process asynchronous execution with restart recovery.
+  - `cloud`: durable Cloud Tasks delivery.
+- **API:** validation, idempotency, jobs, events, cancellation and assessment.
+- **Learning workflow:** document analysis, planning, retrieval practice, grading and mastery updates.
 
-## Initial workflow
+## Workflow
 
 ```text
-execute -> durable dispatch -> lease -> extract -> concept map -> study plan
+execute -> dispatch -> exclusive claim -> extract -> concept map -> study plan
         -> practice package -> mastery state -> artifacts -> completed
+                                      |
+                                      +-> assess -> attempt -> next review
 ```
 
-A later `assess` call grades responses, records an attempt, updates concept confidence and assigns the next review date.
+## Local trust boundary
 
-## Trust boundary
+A local input must use a `file://` URI and resolve inside `LOCAL_INPUT_ROOT`, including after symlink resolution. Runtime state is written with owner-only file permissions under `LOCAL_DATA_DIR`.
 
-The orchestration layer owns user-facing policy and runtime selection. EGO owns one learning workflow. The client interface never needs direct cloud credentials.
+## Cloud trust boundary
+
+The cloud adapter accepts `gs://` sources, applies bucket allow-lists and uses platform IAM. Deployment infrastructure remains outside this repository.

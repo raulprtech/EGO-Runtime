@@ -1,7 +1,7 @@
 {
   "name": "ego-runtime",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "lint": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "node scripts/demo.js"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",

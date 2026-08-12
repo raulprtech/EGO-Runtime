@@ -2,17 +2,20 @@ import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import { AssessmentRequestSchema, ExecuteRequest, ExecuteRequestSchema } from '../schemas/runtime_schemas';
 import { authMiddleware } from '../auth';
-import { getFirestore, COLLECTIONS } from '../../services/firestore';
 import { TaskQueue } from '../../services/task_queue';
 import { AssessmentGraderAgent } from '../../agents/assessment_grader';
-import { AssessmentResultSchema, MasteryStateSchema, PracticeSetSchema } from '../../domain/types';
+import { MasteryStateSchema, PracticeSetSchema } from '../../domain/types';
 import { updateMasteryState } from '../../services/mastery';
 import { EventTracker } from '../../runtime/events';
+import { getRuntimeRepository } from '../../services/runtime_repository';
 
 const router = Router();
 
 router.get('/capabilities', (_req, res) => res.json({
-  runtime: 'ego-runtime', version: '0.3.0',
+  runtime: 'ego-runtime',
+  version: '0.4.0',
+  backend: process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local'),
+  model_provider: process.env.MODEL_PROVIDER ?? 'gemini-adk',
   capabilities: [
     'education.study_plan', 'education.flashcards', 'education.quiz',
     'education.feynman', 'education.mastery', 'documents.pdf', 'documents.text', 'artifacts',
@@ -20,13 +23,13 @@ router.get('/capabilities', (_req, res) => res.json({
 }));
 
 async function dispatchAndRecord(input: ExecuteRequest): Promise<void> {
-  const ref = getFirestore().collection(COLLECTIONS.JOBS).doc(input.request_id);
+  const repository = getRuntimeRepository();
   try {
     await TaskQueue.dispatch(input);
-    await ref.update({ dispatch_status: 'dispatched', dispatch_error: null, updated_at: new Date().toISOString() });
+    await repository.recordDispatch(input.request_id, 'dispatched');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Dispatch failed';
-    await ref.update({ dispatch_status: 'failed', dispatch_error: message, updated_at: new Date().toISOString() });
+    await repository.recordDispatch(input.request_id, 'failed', message);
     throw error;
   }
 }
@@ -35,30 +38,11 @@ router.post('/execute', authMiddleware, async (req, res, next) => {
   try {
     const input = ExecuteRequestSchema.parse(req.body);
     const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-    const ref = getFirestore().collection(COLLECTIONS.JOBS).doc(input.request_id);
-    let shouldDispatch = false;
-    let created = false;
-    await getFirestore().runTransaction(async transaction => {
-      const existing = await transaction.get(ref);
-      if (existing.exists) {
-        if (existing.data()?.request_digest !== digest) throw new Error('IDEMPOTENCY_CONFLICT');
-        shouldDispatch = existing.data()?.status === 'pending' && existing.data()?.dispatch_status !== 'dispatched';
-        return;
-      }
-      created = true;
-      shouldDispatch = true;
-      const now = new Date().toISOString();
-      transaction.create(ref, {
-        request_id: input.request_id, user_id: input.user_id, session_id: input.session_id,
-        objective_id: input.objective_id, status: 'pending', dispatch_status: 'pending',
-        artifacts: [], event_sequence: 0, attempts: 0, request_digest: digest,
-        request_payload: input, created_at: now, updated_at: now,
-      });
-    });
-    if (shouldDispatch) await dispatchAndRecord(input);
+    const result = await getRuntimeRepository().submit(input, digest);
+    if (result.shouldDispatch) await dispatchAndRecord(input);
     res.status(202).json({
       request_id: input.request_id,
-      status: created ? 'accepted' : shouldDispatch ? 'redispatched' : 'already_accepted',
+      status: result.created ? 'accepted' : result.shouldDispatch ? 'redispatched' : 'already_accepted',
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') {
@@ -79,50 +63,44 @@ router.post('/worker', authMiddleware, async (req, res, next) => {
 
 router.post('/maintenance/reconcile', authMiddleware, async (_req, res, next) => {
   try {
-    const snapshot = await getFirestore().collection(COLLECTIONS.JOBS)
-      .where('status', '==', 'pending').limit(25).get();
+    const jobs = await getRuntimeRepository().recoverableJobs(25);
     let dispatched = 0;
     let failed = 0;
-    for (const document of snapshot.docs) {
-      const payload = ExecuteRequestSchema.safeParse(document.data().request_payload);
-      if (!payload.success || document.data().dispatch_status === 'dispatched') continue;
+    for (const payload of jobs) {
       try {
-        await dispatchAndRecord(payload.data);
+        await dispatchAndRecord(payload);
         dispatched += 1;
       } catch {
         failed += 1;
       }
     }
-    res.json({ scanned: snapshot.size, dispatched, failed });
+    res.json({ scanned: jobs.length, dispatched, failed });
   } catch (error) { next(error); }
 });
 
 router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
   try {
     const input = AssessmentRequestSchema.parse(req.body);
-    const requestDigest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-    const jobRef = getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id);
-    const attemptRef = jobRef.collection('attempts').doc(input.assessment_id);
-    const [job, practiceDoc, existingAttempt] = await Promise.all([
-      jobRef.get(), jobRef.collection('internal').doc('practice').get(), attemptRef.get(),
+    const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const repository = getRuntimeRepository();
+    const [job, practiceValue, existing] = await Promise.all([
+      repository.getJob(req.params.request_id),
+      repository.getPractice(req.params.request_id),
+      repository.getAttempt(req.params.request_id, input.assessment_id),
     ]);
-    if (!job.exists) return res.status(404).json({ error: 'Job not found' });
-    if (job.data()?.status !== 'completed') return res.status(409).json({ error: 'Learning package is not ready' });
-    if (job.data()?.user_id !== input.user_id || job.data()?.session_id !== input.session_id) {
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status !== 'completed') return res.status(409).json({ error: 'Learning package is not ready' });
+    if (job.user_id !== input.user_id || job.session_id !== input.session_id) {
       return res.status(403).json({ error: 'Assessment does not belong to this learning session' });
     }
-    if (existingAttempt.exists) {
-      if (existingAttempt.data()?.request_digest !== requestDigest) {
+    if (existing) {
+      if (existing.request_digest !== digest) {
         return res.status(409).json({ error: 'ASSESSMENT_IDEMPOTENCY_CONFLICT' });
       }
-      return res.json({
-        attempt_id: input.assessment_id,
-        assessment: existingAttempt.data()?.assessment,
-        mastery: existingAttempt.data()?.mastery,
-      });
+      return res.json({ attempt_id: input.assessment_id, assessment: existing.assessment, mastery: existing.mastery });
     }
 
-    const practice = PracticeSetSchema.parse(practiceDoc.data());
+    const practice = PracticeSetSchema.parse(practiceValue);
     const questionIds = new Set(practice.quiz.map(question => question.id));
     const responseIds = new Set(input.responses.map(response => response.question_id));
     if (responseIds.size !== input.responses.length ||
@@ -137,77 +115,52 @@ router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
       throw new Error('Assessment grader returned inconsistent results');
     }
 
-    const masteryRef = jobRef.collection('state').doc('mastery');
-    let updatedMastery: ReturnType<typeof updateMasteryState> | undefined;
-    let finalAssessment = assessment;
-    let createdAttempt = false;
-    await getFirestore().runTransaction(async transaction => {
-      const [attemptSnapshot, masterySnapshot] = await Promise.all([
-        transaction.get(attemptRef), transaction.get(masteryRef),
-      ]);
-      if (attemptSnapshot.exists) {
-        if (attemptSnapshot.data()?.request_digest !== requestDigest) throw new Error('ASSESSMENT_IDEMPOTENCY_CONFLICT');
-        updatedMastery = MasteryStateSchema.parse(attemptSnapshot.data()?.mastery);
-        finalAssessment = AssessmentResultSchema.parse(attemptSnapshot.data()?.assessment);
-        return;
-      }
-      const currentMastery = MasteryStateSchema.parse(masterySnapshot.data());
-      const updatedAt = new Date();
-      updatedMastery = updateMasteryState(currentMastery, assessment, updatedAt);
-      createdAttempt = true;
-      transaction.create(attemptRef, {
-        request_digest: requestDigest,
-        assessment,
-        mastery: updatedMastery,
-        responses: input.responses,
-        created_at: updatedAt.toISOString(),
-      });
-      transaction.set(masteryRef, updatedMastery);
-    });
-
-    if (createdAttempt) {
+    const applied = await repository.applyAssessment(
+      req.params.request_id, input.assessment_id, digest, assessment, input.responses,
+      current => updateMasteryState(MasteryStateSchema.parse(current), assessment),
+    );
+    if (applied.conflict) return res.status(409).json({ error: 'ASSESSMENT_IDEMPOTENCY_CONFLICT' });
+    if (applied.created) {
       await new EventTracker(req.params.request_id, input.session_id)
         .emit('assessment_completed', { attempt_id: input.assessment_id });
     }
-    res.json({ attempt_id: input.assessment_id, assessment: finalAssessment, mastery: updatedMastery });
-  } catch (error) {
-    if (error instanceof Error && error.message === 'ASSESSMENT_IDEMPOTENCY_CONFLICT') {
-      return res.status(409).json({ error: error.message });
-    }
-    next(error);
-  }
+    res.json({ attempt_id: input.assessment_id,
+      assessment: applied.attempt?.assessment, mastery: applied.attempt?.mastery });
+  } catch (error) { next(error); }
 });
 
-router.get('/:request_id/mastery', authMiddleware, async (req, res) => {
-  const state = await getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id)
-    .collection('state').doc('mastery').get();
-  if (!state.exists) return res.status(404).json({ error: 'Mastery state not found' });
-  res.json(MasteryStateSchema.parse(state.data()));
+router.get('/:request_id/mastery', authMiddleware, async (req, res, next) => {
+  try {
+    const state = await getRuntimeRepository().getMastery(req.params.request_id);
+    if (!state) return res.status(404).json({ error: 'Mastery state not found' });
+    res.json(MasteryStateSchema.parse(state));
+  } catch (error) { next(error); }
 });
 
-router.get('/:request_id', authMiddleware, async (req, res) => {
-  const doc = await getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id).get();
-  if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
-  const data = doc.data()!;
-  const { request_payload: _payload, request_digest: _digest, lease_owner: _owner,
-    lease_expires_at: _expires, ...publicJob } = data;
-  res.json(publicJob);
+router.get('/:request_id', authMiddleware, async (req, res, next) => {
+  try {
+    const data = await getRuntimeRepository().getJob(req.params.request_id);
+    if (!data) return res.status(404).json({ error: 'Job not found' });
+    const { request_payload: _payload, request_digest: _digest, lease_owner: _owner,
+      lease_expires_at: _expires, ...publicJob } = data;
+    res.json(publicJob);
+  } catch (error) { next(error); }
 });
 
-router.get('/:request_id/events', authMiddleware, async (req, res) => {
-  const cursor = Number.parseInt(String(req.query.cursor ?? 0), 10) || 0;
-  const snapshot = await getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id)
-    .collection(COLLECTIONS.EVENTS).where('sequence_number', '>', cursor).orderBy('sequence_number').get();
-  res.json({ events: snapshot.docs.map(doc => doc.data()) });
+router.get('/:request_id/events', authMiddleware, async (req, res, next) => {
+  try {
+    const cursor = Number.parseInt(String(req.query.cursor ?? 0), 10) || 0;
+    res.json({ events: await getRuntimeRepository().eventsAfter(req.params.request_id, cursor) });
+  } catch (error) { next(error); }
 });
 
-router.post('/:request_id/cancel', authMiddleware, async (req, res) => {
-  const ref = getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id);
-  const doc = await ref.get();
-  if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
-  if (['completed', 'failed'].includes(doc.data()?.status)) return res.status(409).json({ error: 'Job already finished' });
-  await ref.update({ status: 'cancelled', lease_owner: null, lease_expires_at: null, updated_at: new Date().toISOString() });
-  res.json({ status: 'cancelled' });
+router.post('/:request_id/cancel', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await getRuntimeRepository().cancel(req.params.request_id);
+    if (result === 'not_found') return res.status(404).json({ error: 'Job not found' });
+    if (result === 'terminal') return res.status(409).json({ error: 'Job already finished' });
+    res.json({ status: 'cancelled' });
+  } catch (error) { next(error); }
 });
 
 export default router;

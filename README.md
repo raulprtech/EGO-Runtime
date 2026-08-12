@@ -1,40 +1,56 @@
 # EGO Runtime
 
-EGO is an open-source learning-agent runtime built with Google Agent Development Kit for TypeScript. It turns user-provided papers and documents into a grounded learning package that can be managed over repeated study attempts.
+EGO is an open-source, model-agnostic learning-agent runtime. It turns user-provided papers and documents into a grounded learning package that evolves over repeated study attempts.
+
+The included hackathon adapter uses Google Agent Development Kit and Gemini. Agents and learning-domain services depend only on the structured-generation port, so additional model providers can be added without changing the workflow.
 
 Account-specific deployment topology and proprietary client or orchestration code intentionally live outside this repository.
 
 ## Implemented vertical slice
 
 1. Accept an idempotent learning request.
-2. Verify and extract allow-listed PDF, text or Markdown objects from Google Cloud Storage.
-3. Generate a source-grounded concept map and mastery plan with ADK and Gemini 3.5.
+2. Read allow-listed local files in local mode or verified GCS objects through the cloud adapter.
+3. Generate a source-grounded concept map and mastery plan.
 4. Produce a focused session, Feynman prompt, flashcards and short-answer quiz.
 5. Persist artifacts, sequenced events and an initial mastery state.
 6. Grade later quiz responses and update confidence and review dates.
-7. Use Cloud Tasks, transactional dispatch recovery and exclusive worker leases in production.
+7. Recover unfinished local jobs after process restarts.
+8. Support Cloud Tasks, Firestore leases and GCS when the cloud backend is selected.
 
-## Local development
+## Run locally
 
-Requires Node 22.3+, a Gemini key, Google Application Default Credentials, Firestore and GCS buckets.
+Local mode needs Node 22.3+ and a key for the configured model provider. It does not need Firestore, GCS, Application Default Credentials or Cloud Tasks.
 
 ```bash
 cp .env.example .env
+# Add GEMINI_API_KEY to .env
 npm ci --legacy-peer-deps
 npm run lint
 npm test
 npm run dev
 ```
 
-See [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+In another terminal, run the included file-based workflow:
+
+```bash
+npm run demo
+```
+
+Local state and generated artifacts are written under `.ego-runtime/`. Inputs must be inside `LOCAL_INPUT_ROOT`; symlinks and paths that escape that root are rejected.
+
+## Provider extension
+
+`ModelProvider` is the stable inference boundary. The bundled `gemini-adk` adapter is selected with `MODEL_PROVIDER=gemini-adk`; a future provider implements the same structured-generation contract and is registered in the provider factory.
+
+See [local development](docs/local-development.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 
-EGO rejects arbitrary remote URLs, restricts GCS inputs to configured buckets, verifies object metadata and optional hashes, validates model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison. Production deployments should also enforce platform IAM.
+EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.
 
 ## Status
 
-Version 0.3 is a hackathon-oriented vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.4 is a local-first hackathon vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 

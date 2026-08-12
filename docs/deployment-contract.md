@@ -6,7 +6,7 @@ Infrastructure is deliberately outside this repository. A production platform mu
 - Application Default Credentials;
 - Firestore and `FIRESTORE_DATABASE_ID`;
 - input and output GCS buckets;
-- `GEMINI_API_KEY` and `INTERNAL_RUNTIME_TOKEN` through a secret manager;
+- credentials for the selected model provider and `INTERNAL_RUNTIME_TOKEN` through a secret manager;
 - Cloud Tasks queue path and the absolute `/v1/runtime/worker` URL;
 - least-privilege IAM for Firestore, Storage, Tasks and Secret Manager.
 

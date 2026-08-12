@@ -1,5 +1,5 @@
 import { ConceptMap, ConceptMapSchema } from '../domain/types';
-import { runStructuredAgent } from '../runtime/adk';
+import { runStructuredAgent } from '../runtime/structured_generation';
 
 export class DocumentAnalyzerAgent {
   generateConceptMap(documentContext: string, artifactIds: string[], userId: string): Promise<ConceptMap> {

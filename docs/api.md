@@ -30,11 +30,11 @@ All endpoints except `capabilities` require the configured application token. A 
       "id": "source_1",
       "name": "paper.pdf",
       "mime_type": "application/pdf",
-      "uri": "gs://allowed-input/paper.pdf",
+      "uri": "file:///absolute/path/inside/LOCAL_INPUT_ROOT/paper.pdf",
       "sha256": "optional-64-character-hex-digest"
     }
   ]
 }
 ```
 
-A successful submission returns `202` with `accepted`, `redispatched` or `already_accepted`.
+A successful submission returns `202` with `accepted`, `redispatched` or `already_accepted`. Local mode accepts `file://` inputs inside `LOCAL_INPUT_ROOT`; cloud mode accepts `gs://` inputs.

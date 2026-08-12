@@ -1,5 +1,5 @@
 import { AssessmentResult, AssessmentResultSchema, PracticeSet } from '../domain/types';
-import { runStructuredAgent } from '../runtime/adk';
+import { runStructuredAgent } from '../runtime/structured_generation';
 
 export class AssessmentGraderAgent {
   grade(practice: PracticeSet, responses: Array<{ question_id: string; answer: string }>, userId: string): Promise<AssessmentResult> {

@@ -1,5 +1,5 @@
 import { StudyPlan, StudyPlanSchema } from '../domain/types';
-import { runStructuredAgent } from '../runtime/adk';
+import { runStructuredAgent } from '../runtime/structured_generation';
 
 export class PlannerAgent {
   buildStudyPlan(objective: string, materials: string, userId: string): Promise<StudyPlan> {

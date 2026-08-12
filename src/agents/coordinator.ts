@@ -1,8 +1,8 @@
 import { ExecuteRequest } from '../api/schemas/runtime_schemas';
 import { EventTracker } from '../runtime/events';
-import { getFirestore, COLLECTIONS } from '../services/firestore';
 import { ArtifactStore } from '../services/artifact_store';
 import { JobLifecycle } from '../services/job_lifecycle';
+import { getRuntimeRepository } from '../services/runtime_repository';
 import { PlannerAgent } from './planner';
 import { DocumentAnalyzerAgent } from './document_analyzer';
 import { PracticeDesignerAgent } from './practice_designer';
@@ -19,7 +19,7 @@ export class Coordinator {
   async run(): Promise<boolean> {
     const owner = await JobLifecycle.claim(this.request.request_id);
     if (!owner) return false;
-    const jobRef = getFirestore().collection(COLLECTIONS.JOBS).doc(this.request.request_id);
+    const repository = getRuntimeRepository();
 
     try {
       await this.tracker.emit('runtime_started');
@@ -71,7 +71,7 @@ export class Coordinator {
           throw new Error(`Practice item ${item.id} contains invalid grounding references`);
         }
       }
-      await jobRef.collection('internal').doc('practice').set(practice);
+      await repository.savePractice(this.request.request_id, practice);
       const learnerPractice = {
         session: practice.session,
         flashcards: practice.flashcards,
@@ -90,7 +90,7 @@ export class Coordinator {
         })),
         updated_at: now.toISOString(),
       };
-      await jobRef.collection('state').doc('mastery').set(mastery);
+      await repository.saveMastery(this.request.request_id, mastery);
       const masteryArtifact = await ArtifactStore.saveGeneratedArtifact(
         this.request.request_id, 'mastery_state', 'mastery_state.json', 'application/json',
         JSON.stringify(mastery, null, 2));

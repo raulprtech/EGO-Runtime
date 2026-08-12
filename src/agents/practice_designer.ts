@@ -1,5 +1,5 @@
 import { PracticeSet, PracticeSetSchema } from '../domain/types';
-import { runStructuredAgent } from '../runtime/adk';
+import { runStructuredAgent } from '../runtime/structured_generation';
 
 export class PracticeDesignerAgent {
   build(concepts: unknown, objective: string, userId: string): Promise<PracticeSet> {

@@ -5,6 +5,7 @@ import cors from 'cors';
 import runtimeRoutes from './src/api/routes/runtime';
 import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
+import { TaskQueue } from './src/services/task_queue';
 
 export async function createApp() {
   const app = express();
@@ -12,7 +13,11 @@ export async function createApp() {
   app.disable('x-powered-by');
   app.use(cors({ origin: origins.length ? origins : false }));
   app.use(express.json({ limit: '256kb' }));
-  app.get('/health', (_req, res) => res.json({ status: 'ok', runtime: 'ego-runtime', version: '0.3.0' }));
+  app.get('/health', (_req, res) => res.json({
+    status: 'ok', runtime: 'ego-runtime', version: '0.4.0',
+    backend: process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local'),
+    model_provider: process.env.MODEL_PROVIDER ?? 'gemini-adk',
+  }));
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
@@ -21,6 +26,7 @@ export async function createApp() {
     const dist = path.join(process.cwd(), 'dist');
     app.use(express.static(dist)); app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
   }
+  void TaskQueue.recoverPendingLocal().catch(error => console.error('Local recovery failed', error));
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = error instanceof Error ? error.message : 'Internal error';
     res.status(error instanceof ZodError ? 400 : 500).json({ error: message });
