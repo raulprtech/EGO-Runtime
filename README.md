@@ -1,25 +1,22 @@
 # EGO Runtime
 
-EGO is an open-source learning-agent runtime built with Google Agent Development Kit for TypeScript. It turns user-provided papers and documents into a source-grounded concept map and a structured mastery plan.
+EGO is an open-source learning-agent runtime built with Google Agent Development Kit for TypeScript. It turns user-provided papers and documents into a grounded learning package that can be managed over repeated study attempts.
 
-EGO intentionally contains no account-specific deployment topology and no private Nigma or ARIA code. Production infrastructure lives in a separate deployment repository.
+Account-specific deployment topology and proprietary client or orchestration code intentionally live outside this repository.
 
 ## Implemented vertical slice
 
-1. Receive an idempotent learning request.
-2. Read allow-listed PDF, text, or Markdown objects from Google Cloud Storage.
-3. Verify object size, MIME type and optional SHA-256.
-4. Extract document text.
-5. Run ADK Document Analyzer and Learning Planner agents on Gemini 3.5.
-6. Validate their structured output with Zod.
-7. Upload the concept map and study plan to GCS.
-8. Persist job state and sequenced events in Firestore.
-
-Cloud Tasks is supported through environment configuration; local development runs synchronously.
+1. Accept an idempotent learning request.
+2. Verify and extract allow-listed PDF, text or Markdown objects from Google Cloud Storage.
+3. Generate a source-grounded concept map and mastery plan with ADK and Gemini 3.5.
+4. Produce a focused session, Feynman prompt, flashcards and short-answer quiz.
+5. Persist artifacts, sequenced events and an initial mastery state.
+6. Grade later quiz responses and update confidence and review dates.
+7. Use Cloud Tasks, transactional dispatch recovery and exclusive worker leases in production.
 
 ## Local development
 
-Requires Node 22.3+, a Gemini key, Google Application Default Credentials, Firestore, and two GCS buckets.
+Requires Node 22.3+, a Gemini key, Google Application Default Credentials, Firestore and GCS buckets.
 
 ```bash
 cp .env.example .env
@@ -29,15 +26,15 @@ npm test
 npm run dev
 ```
 
-API documentation is in [docs/api.md](docs/api.md), architecture in [docs/architecture.md](docs/architecture.md), and deployment contracts in [docs/deployment-contract.md](docs/deployment-contract.md).
+See [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 
-EGO rejects arbitrary HTTPS artifacts, restricts GCS inputs to configured buckets, verifies metadata, uses constant-time bearer-token comparison, and scopes events below each job. Production deployments should additionally place Cloud Run behind IAM and private ingress.
+EGO rejects arbitrary remote URLs, restricts GCS inputs to configured buckets, verifies object metadata and optional hashes, validates model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison. Production deployments should also enforce platform IAM.
 
 ## Status
 
-Version 0.2 is a hackathon-oriented vertical slice. Flashcards, quizzes, Feynman conversations, mastery tracking and ARIA/Nigma adapters are planned extensions rather than advertised capabilities.
+Version 0.3 is a hackathon-oriented vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 

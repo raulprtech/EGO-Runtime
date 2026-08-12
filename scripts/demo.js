@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'crypto';
 
-const API_URL = process.env.APP_URL ? `${process.env.APP_URL}/v1` : 'http://localhost:3000/v1';
+const API_URL = process.env.APP_URL ? `${process.env.APP_URL}/v1/runtime` : 'http://localhost:3000/v1/runtime';
 const TOKEN = process.env.INTERNAL_RUNTIME_TOKEN || 'test-token';
 
 async function runDemo() {
@@ -35,7 +35,7 @@ async function runDemo() {
     capabilities: ['education.study_plan']
   };
 
-  const execRes = await fetch(`${API_URL}/runtime/execute`, {
+  const execRes = await fetch(`${API_URL}/execute`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${TOKEN}`,
@@ -59,7 +59,7 @@ async function runDemo() {
   while (!jobCompleted) {
     await new Promise(r => setTimeout(r, 2000));
     
-    const evRes = await fetch(`${API_URL}/runtime/${reqId}/events?cursor=${cursor}`, {
+    const evRes = await fetch(`${API_URL}/${reqId}/events?cursor=${cursor}`, {
       headers: { 'Authorization': `Bearer ${TOKEN}` }
     });
     
@@ -77,7 +77,7 @@ async function runDemo() {
 
   // 4. Final Status
   console.log('\n🏁 Fetching final job status...');
-  const statRes = await fetch(`${API_URL}/runtime/${reqId}`, {
+  const statRes = await fetch(`${API_URL}/${reqId}`, {
     headers: { 'Authorization': `Bearer ${TOKEN}` }
   });
   if (statRes.ok) {

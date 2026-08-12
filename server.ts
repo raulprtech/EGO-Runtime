@@ -4,6 +4,7 @@ import path from 'node:path';
 import cors from 'cors';
 import runtimeRoutes from './src/api/routes/runtime';
 import { createServer as createViteServer } from 'vite';
+import { ZodError } from 'zod';
 
 export async function createApp() {
   const app = express();
@@ -11,7 +12,7 @@ export async function createApp() {
   app.disable('x-powered-by');
   app.use(cors({ origin: origins.length ? origins : false }));
   app.use(express.json({ limit: '256kb' }));
-  app.get('/health', (_req, res) => res.json({ status: 'ok', runtime: 'ego-runtime', version: '0.2.0' }));
+  app.get('/health', (_req, res) => res.json({ status: 'ok', runtime: 'ego-runtime', version: '0.3.0' }));
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
@@ -22,7 +23,7 @@ export async function createApp() {
   }
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const message = error instanceof Error ? error.message : 'Internal error';
-    res.status(message.includes('validation') ? 400 : 500).json({ error: message });
+    res.status(error instanceof ZodError ? 400 : 500).json({ error: message });
   });
   return app;
 }

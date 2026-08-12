@@ -33,7 +33,7 @@ export default function App() {
           <span key={c} className="px-3 py-2 bg-[#0F1115] border border-[#2D3139] rounded font-mono text-sm">{c}</span>)}</div>
         {!capabilities.length && !error && <p className="text-slate-500">Loading runtime contract…</p>}
       </section>
-      <p className="text-slate-500 text-sm mt-8">Operational jobs are intentionally not exposed in this public console. ARIA and Nigma consume the authenticated API.</p>
+      <p className="text-slate-500 text-sm mt-8">Operational jobs are intentionally not exposed in this public console. the client application and the orchestration layer consume the authenticated API.</p>
     </div>
   </main>;
 }

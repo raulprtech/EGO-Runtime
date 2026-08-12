@@ -1,120 +1,40 @@
-# EGO Runtime API Documentation
+# API reference
 
-The EGO Runtime exposes a RESTful API designed for service-to-service communication (invoked by the Nigma control plane).
+Base path: `/v1/runtime`.
 
-## Base URL
-`/v1/runtime` (or `/v1`)
-
-## Authentication
-All endpoints require a Bearer token.
-`Authorization: Bearer <INTERNAL_RUNTIME_TOKEN>`
-
----
+All endpoints except `capabilities` require the configured application token. A platform IAM layer may additionally authenticate service identities.
 
 ## Endpoints
 
-### 1. Get Capabilities
-Returns the list of features supported by this runtime.
+- `GET /capabilities` — implemented runtime capabilities.
+- `POST /execute` — create or safely redispatch an idempotent job.
+- `POST /worker` — Cloud Tasks delivery endpoint.
+- `POST /maintenance/reconcile` — redispatch pending jobs whose initial dispatch failed.
+- `GET /:request_id` — sanitized public job state and artifact references.
+- GET /:request_id/mastery — latest longitudinal concept confidence and review schedule.
+- `GET /:request_id/events?cursor=N` — durable ordered events after a cursor.
+- `POST /:request_id/cancel` — cooperative cancellation.
+- `POST /:request_id/assess` — grade quiz responses and update mastery.
 
-**Request:**
-`GET /v1/capabilities`
+## Execute request
 
-**Response (200 OK):**
-```json
-{
-  "runtime": "ego-runtime",
-  "version": "0.1.0",
-  "capabilities": [
-    "education.tutor",
-    "education.research",
-    "education.feynman",
-    "education.flashcards",
-    "education.critique",
-    "education.study_plan",
-    "education.scheduling",
-    "documents.pdf",
-    "artifacts"
-  ]
-}
-```
-
-### 2. Execute Task
-Submits an asynchronous learning task to the runtime. 
-
-**Request:**
-`POST /v1/runtime/execute`
-
-**Body:**
 ```json
 {
   "request_id": "req_123",
-  "user_id": "usr_456",
-  "session_id": "sess_789",
-  "objective_id": "obj_001",
-  "message": "I need to understand backpropagation.",
-  "attachments": [],
-  "capabilities": ["education.tutor"]
-}
-```
-
-**Response (202 Accepted):**
-```json
-{
-  "request_id": "req_123",
-  "status": "accepted"
-}
-```
-
-### 3. Get Job Status
-Retrieves the current state of a submitted job.
-
-**Request:**
-`GET /v1/runtime/:request_id`
-
-**Response (200 OK):**
-```json
-{
-  "request_id": "req_123",
-  "session_id": "sess_789",
-  "objective_id": "obj_001",
-  "status": "running",
-  "created_at": "2026-08-11T20:00:00Z",
-  "updated_at": "2026-08-11T20:00:05Z"
-}
-```
-
-### 4. Get Events (Polling/Cursor)
-Retrieves the sequenced events for a job, useful for real-time monitoring.
-
-**Request:**
-`GET /v1/runtime/:request_id/events?cursor=0`
-
-**Response (200 OK):**
-```json
-{
-  "events": [
+  "user_id": "user_1",
+  "session_id": "session_1",
+  "objective_id": "objective_1",
+  "message": "Master the supplied papers",
+  "attachments": [
     {
-      "event_id": "evt_abc123",
-      "request_id": "req_123",
-      "session_id": "sess_789",
-      "sequence_number": 1,
-      "type": "runtime_started",
-      "timestamp": "2026-08-11T20:00:01Z",
-      "data": { "message": "Coordinator initialized" }
+      "id": "source_1",
+      "name": "paper.pdf",
+      "mime_type": "application/pdf",
+      "uri": "gs://allowed-input/paper.pdf",
+      "sha256": "optional-64-character-hex-digest"
     }
   ]
 }
 ```
 
-### 5. Cancel Job
-Attempts to cancel a running job.
-
-**Request:**
-`POST /v1/runtime/:request_id/cancel`
-
-**Response (200 OK):**
-```json
-{
-  "status": "cancelled"
-}
-```
+A successful submission returns `202` with `accepted`, `redispatched` or `already_accepted`.

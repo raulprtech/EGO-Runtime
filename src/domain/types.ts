@@ -9,13 +9,6 @@ export const LearningObjectiveSchema = z.object({
 });
 export type LearningObjective = z.infer<typeof LearningObjectiveSchema>;
 
-export const ConceptSchema = z.object({
-  concept: z.string(), confidence: z.number().min(0).max(1),
-  evidence: z.array(z.object({ type: z.string(), score: z.number() })),
-  last_reviewed: z.string().optional(), next_review: z.string().optional(),
-});
-export type ConceptState = z.infer<typeof ConceptSchema>;
-
 export const StudyPlanSchema = z.object({
   learning_objective: z.string(),
   sub_objectives: z.array(z.string()),
@@ -42,3 +35,40 @@ export const ConceptMapSchema = z.object({
   edges: z.array(z.object({ source: z.string(), target: z.string(), relationship: z.string() })),
 });
 export type ConceptMap = z.infer<typeof ConceptMapSchema>;
+
+export const PracticeSetSchema = z.object({
+  session: z.object({
+    title: z.string(),
+    focus_minutes: z.number().int().min(15).max(90),
+    feynman_prompt: z.string(),
+    completion_criteria: z.array(z.string()),
+  }),
+  flashcards: z.array(z.object({
+    id: z.string(), concept_id: z.string(), front: z.string(), back: z.string(),
+    source_artifact_ids: z.array(z.string()),
+  })).min(3).max(30),
+  quiz: z.array(z.object({
+    id: z.string(), concept_id: z.string(), prompt: z.string(), answer_key: z.string(),
+    rubric: z.array(z.string()), source_artifact_ids: z.array(z.string()),
+  })).min(3).max(15),
+});
+export type PracticeSet = z.infer<typeof PracticeSetSchema>;
+
+export const AssessmentResultSchema = z.object({
+  results: z.array(z.object({
+    question_id: z.string(), concept_id: z.string(), score: z.number().min(0).max(1),
+    feedback: z.string(), missing_elements: z.array(z.string()),
+  })),
+  summary: z.string(),
+});
+export type AssessmentResult = z.infer<typeof AssessmentResultSchema>;
+
+export const MasteryStateSchema = z.object({
+  objective_id: z.string(),
+  concepts: z.array(z.object({
+    concept_id: z.string(), label: z.string(), confidence: z.number().min(0).max(1),
+    attempts: z.number().int().nonnegative(), next_review_at: z.string(),
+  })),
+  updated_at: z.string(),
+});
+export type MasteryState = z.infer<typeof MasteryStateSchema>;

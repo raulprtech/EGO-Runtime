@@ -22,13 +22,20 @@ export const ExecuteRequestSchema = z.object({
 });
 export type ExecuteRequest = z.infer<typeof ExecuteRequestSchema>;
 
+export const AssessmentRequestSchema = z.object({
+  assessment_id: z.string().regex(/^[A-Za-z0-9_-]+$/).max(128),
+  user_id: z.string().min(1).max(128),
+  session_id: z.string().min(1).max(128),
+  responses: z.array(z.object({
+    question_id: z.string().min(1).max(128),
+    answer: z.string().min(1).max(10_000),
+  })).min(1).max(15),
+});
+export type AssessmentRequest = z.infer<typeof AssessmentRequestSchema>;
+
 export const EventSchema = z.object({
-  event_id: z.string(),
-  request_id: z.string(),
-  session_id: z.string(),
-  sequence_number: z.number().int().positive(),
-  type: z.string(),
-  timestamp: z.string(),
+  event_id: z.string(), request_id: z.string(), session_id: z.string(),
+  sequence_number: z.number().int().positive(), type: z.string(), timestamp: z.string(),
   data: z.record(z.string(), z.unknown()),
 });
 export type RuntimeEvent = z.infer<typeof EventSchema>;
@@ -37,14 +44,8 @@ export const JobStatusSchema = z.enum(['pending', 'running', 'completed', 'faile
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 
 export const JobSchema = z.object({
-  request_id: z.string(),
-  session_id: z.string(),
-  objective_id: z.string(),
-  user_id: z.string(),
-  status: JobStatusSchema,
-  artifacts: z.array(ArtifactSchema).default([]),
-  error: z.string().optional(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  request_id: z.string(), session_id: z.string(), objective_id: z.string(), user_id: z.string(),
+  status: JobStatusSchema, artifacts: z.array(ArtifactSchema).default([]), error: z.string().optional(),
+  created_at: z.string(), updated_at: z.string(),
 });
 export type Job = z.infer<typeof JobSchema>;
