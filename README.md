@@ -1,53 +1,44 @@
-# EGO Runtime (formerly Aria Learning Runtime)
+# EGO Runtime
 
-EGO Runtime is an autonomous educational agent engine designed to coordinate learning workflows. It transforms high-level academic intentions into executable learning processes by orchestrating specialized agents (Planner, Document Analyzer, Tutor, Critic, etc.).
+EGO is an open-source learning-agent runtime built with Google Agent Development Kit for TypeScript. It turns user-provided papers and documents into a source-grounded concept map and a structured mastery plan.
 
-This runtime is designed to be invoked by a higher-level control plane ("Nigma") and executes tasks asynchronously, emitting observable, sequenced events and durable artifacts.
+EGO intentionally contains no account-specific deployment topology and no private Nigma or ARIA code. Production infrastructure lives in a separate deployment repository.
 
-## Key Principles
-*   **Active Education:** Prioritizes real learning, autonomy, and epistemological honesty over complacency.
-*   **Tool Coordination:** Acts as a longitudinal layer over existing educational tools (documents, search, flashcards).
-*   **Asynchronous & Observable:** HTTP API immediately accepts tasks (202) and processes them in the background, emitting Server-Sent Events (SSE) compatible structured logs.
+## Implemented vertical slice
 
-## Project Structure
-*   `src/api/`: Express routes and Zod schemas (Contracts).
-*   `src/agents/`: Specific agent logic (Coordinator, Planner, DocumentAnalyzer).
-*   `src/services/`: Firestore integration, Task Queue (simulated), Artifact Store.
-*   `src/domain/`: Core business entities (LearningObjective, ConceptState).
-*   `src/tools/`: Integration adapters (e.g., Calendar).
-*   `docs/`: Architecture, Decisions, API, Deployment, and Nigma Integration guides.
-*   `scripts/`: Demo scripts for local testing.
+1. Receive an idempotent learning request.
+2. Read allow-listed PDF, text, or Markdown objects from Google Cloud Storage.
+3. Verify object size, MIME type and optional SHA-256.
+4. Extract document text.
+5. Run ADK Document Analyzer and Learning Planner agents on Gemini 3.5.
+6. Validate their structured output with Zod.
+7. Upload the concept map and study plan to GCS.
+8. Persist job state and sequenced events in Firestore.
 
-## Local Development
+Cloud Tasks is supported through environment configuration; local development runs synchronously.
 
-### Requirements
-*   Node.js v22+
-*   Google Cloud SDK (for Firebase local credentials, or set service account env vars)
-*   A valid Gemini API Key
+## Local development
 
-### Setup
-1. Copy the environment template:
-   ```bash
-   cp .env.example .env
-   ```
-2. Configure `.env` with your `GEMINI_API_KEY`.
-3. Install dependencies:
-   ```bash
-   npm install
-   ```
-4. Run the development server:
-   ```bash
-   npm run dev
-   ```
-5. In a separate terminal, run the E2E vertical slice demo:
-   ```bash
-   node scripts/demo.js
-   ```
+Requires Node 22.3+, a Gemini key, Google Application Default Credentials, Firestore, and two GCS buckets.
 
-## Documentation
-Please refer to the `/docs` folder for detailed documentation:
-*   [Architecture (architecture.md)](./docs/architecture.md)
-*   [Architectural Decisions (decisions.md)](./docs/decisions.md)
-*   [API Reference (api.md)](./docs/api.md)
-*   [Nigma Integration (nigma-integration.md)](./docs/nigma-integration.md)
-*   [Deployment (deploy.md)](./docs/deploy.md)
+```bash
+cp .env.example .env
+npm ci --legacy-peer-deps
+npm run lint
+npm test
+npm run dev
+```
+
+API documentation is in [docs/api.md](docs/api.md), architecture in [docs/architecture.md](docs/architecture.md), and deployment contracts in [docs/deployment-contract.md](docs/deployment-contract.md).
+
+## Security
+
+EGO rejects arbitrary HTTPS artifacts, restricts GCS inputs to configured buckets, verifies metadata, uses constant-time bearer-token comparison, and scopes events below each job. Production deployments should additionally place Cloud Run behind IAM and private ingress.
+
+## Status
+
+Version 0.2 is a hackathon-oriented vertical slice. Flashcards, quizzes, Feynman conversations, mastery tracking and ARIA/Nigma adapters are planned extensions rather than advertised capabilities.
+
+## License
+
+Apache-2.0.

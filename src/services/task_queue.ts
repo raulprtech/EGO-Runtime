@@ -1,24 +1,36 @@
+import { CloudTasksClient } from '@google-cloud/tasks';
 import { ExecuteRequest } from '../api/schemas/runtime_schemas';
 import { Coordinator } from '../agents/coordinator';
-import { getFirestore, COLLECTIONS } from './firestore';
+
+const client = new CloudTasksClient();
 
 export class TaskQueue {
   static async dispatch(request: ExecuteRequest): Promise<void> {
-    // Simulate Pub/Sub or Cloud Tasks behavior.
-    // We run this asynchronously so the HTTP response can return immediately.
-    setImmediate(async () => {
-      try {
-        console.log(`[TaskQueue] Picked up job ${request.request_id}`);
-        const coordinator = new Coordinator(request);
-        await coordinator.run();
-      } catch (error) {
-        console.error(`[TaskQueue] Job ${request.request_id} failed:`, error);
-        const db = getFirestore();
-        await db.collection(COLLECTIONS.JOBS).doc(request.request_id).update({
-          status: 'failed',
-          updated_at: new Date().toISOString()
-        });
-      }
+    if (!process.env.TASKS_QUEUE_PATH || !process.env.WORKER_URL) {
+      if (process.env.NODE_ENV === 'production') throw new Error('Cloud Tasks is not configured');
+      return this.dispatchLocal(request);
+    }
+    await client.createTask({
+      parent: process.env.TASKS_QUEUE_PATH,
+      task: {
+        name: `${process.env.TASKS_QUEUE_PATH}/tasks/${request.request_id.replace(/[^A-Za-z0-9_-]/g, '-')}`,
+        httpRequest: {
+          httpMethod: 'POST',
+          url: process.env.WORKER_URL,
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Ego-Runtime-Token': process.env.INTERNAL_RUNTIME_TOKEN ?? '',
+          },
+          oidcToken: process.env.TASKS_SERVICE_ACCOUNT
+            ? { serviceAccountEmail: process.env.TASKS_SERVICE_ACCOUNT }
+            : undefined,
+          body: Buffer.from(JSON.stringify(request)).toString('base64'),
+        },
+      },
     });
+  }
+
+  static dispatchLocal(request: ExecuteRequest): Promise<void> {
+    return new Coordinator(request).run();
   }
 }

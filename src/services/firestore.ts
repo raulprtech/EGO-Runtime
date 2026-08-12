@@ -1,23 +1,13 @@
-import * as admin from 'firebase-admin';
+import { getApps, initializeApp } from 'firebase-admin/app';
+import { Firestore, getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 
-// Initialize Firebase Admin lazily to prevent crash on startup if not configured properly yet
-let db: admin.firestore.Firestore | null = null;
-
-export function getFirestore(): admin.firestore.Firestore {
+let db: Firestore | null = null;
+export function getFirestore(): Firestore {
   if (!db) {
-    if (!admin.apps.length) {
-      // In this environment, we rely on application default credentials 
-      // or the environment variables injected by the platform.
-      admin.initializeApp();
-    }
-    db = admin.firestore();
+    const app = getApps()[0] ?? initializeApp();
+    const databaseId = process.env.FIRESTORE_DATABASE_ID;
+    db = databaseId ? getAdminFirestore(app, databaseId) : getAdminFirestore(app);
   }
   return db;
 }
-
-export const COLLECTIONS = {
-  JOBS: 'aria_jobs',
-  EVENTS: 'aria_events',
-  ARTIFACTS: 'aria_artifacts',
-  SEQUENCES: 'aria_sequences' // For generating monotonic event IDs
-};
+export const COLLECTIONS = { JOBS: 'ego_jobs', EVENTS: 'events', ARTIFACTS: 'ego_artifacts' } as const;

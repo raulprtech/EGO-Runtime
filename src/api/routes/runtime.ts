@@ -1,115 +1,61 @@
-import { Router, Request, Response } from 'express';
+import { createHash } from 'node:crypto';
+import { Router } from 'express';
 import { ExecuteRequestSchema } from '../schemas/runtime_schemas';
+import { authMiddleware } from '../auth';
 import { getFirestore, COLLECTIONS } from '../../services/firestore';
 import { TaskQueue } from '../../services/task_queue';
 
 const router = Router();
+router.get('/capabilities', (_req, res) => res.json({
+  runtime: 'ego-runtime', version: '0.2.0',
+  capabilities: ['education.study_plan', 'documents.pdf', 'documents.text', 'artifacts'],
+}));
 
-// Simple auth middleware simulation
-const authMiddleware = (req: Request, res: Response, next: Function) => {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing or invalid Authorization header' });
-  }
-  next();
-};
-
-router.get('/capabilities', (req, res) => {
-  res.json({
-    runtime: "ego-runtime",
-    version: "0.1.0",
-    capabilities: [
-      "education.tutor",
-      "education.research",
-      "education.feynman",
-      "education.flashcards",
-      "education.critique",
-      "education.study_plan",
-      "education.scheduling",
-      "documents.pdf",
-      "artifacts"
-    ]
-  });
-});
-
-router.post('/execute', authMiddleware, async (req, res) => {
+router.post('/execute', authMiddleware, async (req, res, next) => {
   try {
-    const parsedReq = ExecuteRequestSchema.parse(req.body);
-    
-    const db = getFirestore();
-    const jobRef = db.collection(COLLECTIONS.JOBS).doc(parsedReq.request_id);
-    
-    // Idempotency check
-    const jobDoc = await jobRef.get();
-    if (jobDoc.exists) {
-      return res.status(202).json({
-        request_id: parsedReq.request_id,
-        status: 'accepted',
-        message: 'Job already exists'
-      });
-    }
-
-    // Persist new job
-    await jobRef.set({
-      request_id: parsedReq.request_id,
-      session_id: parsedReq.session_id,
-      objective_id: parsedReq.objective_id,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    const input = ExecuteRequestSchema.parse(req.body);
+    const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const ref = getFirestore().collection(COLLECTIONS.JOBS).doc(input.request_id);
+    let created = false;
+    await getFirestore().runTransaction(async tx => {
+      const existing = await tx.get(ref);
+      if (existing.exists) {
+        if (existing.data()?.request_digest !== digest) throw new Error('IDEMPOTENCY_CONFLICT');
+        return;
+      }
+      created = true; const now = new Date().toISOString();
+      tx.create(ref, { request_id: input.request_id, user_id: input.user_id, session_id: input.session_id,
+        objective_id: input.objective_id, status: 'pending', artifacts: [], event_sequence: 0,
+        request_digest: digest, created_at: now, updated_at: now });
     });
-
-    // Dispatch async work
-    await TaskQueue.dispatch(parsedReq);
-
-    // Return 202 Accepted immediately
-    res.status(202).json({
-      request_id: parsedReq.request_id,
-      status: 'accepted'
-    });
-  } catch (error: any) {
-    res.status(400).json({ error: error.message || 'Invalid request' });
+    if (created) await TaskQueue.dispatch(input);
+    res.status(202).json({ request_id: input.request_id, status: created ? 'accepted' : 'already_accepted' });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'IDEMPOTENCY_CONFLICT') return res.status(409).json({ error: error.message });
+    next(error);
   }
 });
 
+router.post('/worker', authMiddleware, async (req, res, next) => {
+  try { const input = ExecuteRequestSchema.parse(req.body); await TaskQueue.dispatchLocal(input); res.status(204).end(); }
+  catch (error) { next(error); }
+});
 router.get('/:request_id', authMiddleware, async (req, res) => {
-  const db = getFirestore();
-  const doc = await db.collection(COLLECTIONS.JOBS).doc(req.params.request_id).get();
-  if (!doc.exists) {
-    return res.status(404).json({ error: 'Job not found' });
-  }
+  const doc = await getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id).get();
+  if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
   res.json(doc.data());
 });
-
 router.get('/:request_id/events', authMiddleware, async (req, res) => {
-  const db = getFirestore();
-  const cursor = parseInt(req.query.cursor as string || '0', 10);
-  
-  const snapshot = await db.collection(COLLECTIONS.EVENTS)
-    .where('request_id', '==', req.params.request_id)
-    .where('sequence_number', '>', cursor)
-    .orderBy('sequence_number', 'asc')
-    .get();
-    
-  const events = snapshot.docs.map(d => d.data());
-  res.json({ events });
+  const cursor = Number.parseInt(String(req.query.cursor ?? 0), 10) || 0;
+  const snapshot = await getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id)
+    .collection(COLLECTIONS.EVENTS).where('sequence_number', '>', cursor).orderBy('sequence_number').get();
+  res.json({ events: snapshot.docs.map(doc => doc.data()) });
 });
-
 router.post('/:request_id/cancel', authMiddleware, async (req, res) => {
-  const db = getFirestore();
-  const jobRef = db.collection(COLLECTIONS.JOBS).doc(req.params.request_id);
-  
-  const doc = await jobRef.get();
-  if (!doc.exists) {
-    return res.status(404).json({ error: 'Job not found' });
-  }
-  
-  await jobRef.update({
-    status: 'cancelled',
-    updated_at: new Date().toISOString()
-  });
-  
+  const ref = getFirestore().collection(COLLECTIONS.JOBS).doc(req.params.request_id);
+  const doc = await ref.get(); if (!doc.exists) return res.status(404).json({ error: 'Job not found' });
+  if (['completed', 'failed'].includes(doc.data()?.status)) return res.status(409).json({ error: 'Job already finished' });
+  await ref.update({ status: 'cancelled', updated_at: new Date().toISOString() });
   res.json({ status: 'cancelled' });
 });
-
 export default router;

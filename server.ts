@@ -1,45 +1,32 @@
-import express from "express";
-import path from "path";
-import cors from "cors";
-import runtimeRoutes from "./src/api/routes/runtime";
-import { createServer as createViteServer } from "vite";
+import 'dotenv/config';
+import express from 'express';
+import path from 'node:path';
+import cors from 'cors';
+import runtimeRoutes from './src/api/routes/runtime';
+import { createServer as createViteServer } from 'vite';
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
-
-  app.use(cors());
-  app.use(express.json());
-
-  // Health check
-  app.get("/health", (req, res) => {
-    res.json({ status: "ok", runtime: "ego-runtime" });
-  });
-
-  // API Routes
-  app.use("/v1/runtime", runtimeRoutes);
-  
-  // Also expose at /v1 (if Nigma calls /v1/capabilities directly)
-  app.use("/v1", runtimeRoutes);
-
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+  const origins = (process.env.CORS_ORIGINS ?? '').split(',').filter(Boolean);
+  app.disable('x-powered-by');
+  app.use(cors({ origin: origins.length ? origins : false }));
+  app.use(express.json({ limit: '256kb' }));
+  app.get('/health', (_req, res) => res.json({ status: 'ok', runtime: 'ego-runtime', version: '0.2.0' }));
+  app.use('/v1/runtime', runtimeRoutes);
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    const dist = path.join(process.cwd(), 'dist');
+    app.use(express.static(dist)); app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
   }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`EGO Runtime Server running on http://localhost:${PORT}`);
+  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const message = error instanceof Error ? error.message : 'Internal error';
+    res.status(message.includes('validation') ? 400 : 500).json({ error: message });
   });
+  return app;
 }
-
-startServer();
+if (process.env.NODE_ENV !== 'test') {
+  const port = Number(process.env.PORT ?? 3000);
+  createApp().then(app => app.listen(port, '0.0.0.0', () => console.log(`EGO Runtime listening on ${port}`)));
+}

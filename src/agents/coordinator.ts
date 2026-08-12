@@ -6,84 +6,47 @@ import { PlannerAgent } from './planner';
 import { DocumentAnalyzerAgent } from './document_analyzer';
 
 export class Coordinator {
-  private request: ExecuteRequest;
-  private tracker: EventTracker;
-
-  constructor(request: ExecuteRequest) {
-    this.request = request;
+  private readonly tracker: EventTracker;
+  constructor(private readonly request: ExecuteRequest) {
     this.tracker = new EventTracker(request.request_id, request.session_id);
   }
-
+  private async assertActive(): Promise<void> {
+    const doc = await getFirestore().collection(COLLECTIONS.JOBS).doc(this.request.request_id).get();
+    if (doc.data()?.status === 'cancelled') throw new Error('JOB_CANCELLED');
+  }
   async run(): Promise<void> {
-    const db = getFirestore();
-    const jobRef = db.collection(COLLECTIONS.JOBS).doc(this.request.request_id);
-
+    const jobRef = getFirestore().collection(COLLECTIONS.JOBS).doc(this.request.request_id);
+    const current = await jobRef.get();
+    if (!current.exists || ['completed', 'cancelled'].includes(current.data()?.status)) return;
     try {
       await jobRef.update({ status: 'running' as JobStatus, updated_at: new Date().toISOString() });
-      await this.tracker.emit('runtime_started', { message: 'Coordinator initialized' });
-
-      // 1. Artifact Validation
-      await this.tracker.emit('validating_artifacts', { count: this.request.attachments.length });
+      await this.tracker.emit('runtime_started');
+      const extracted: string[] = [];
       for (const artifact of this.request.attachments) {
-        await ArtifactStore.validateIncomingArtifact(artifact);
+        await this.assertActive();
+        await this.tracker.emit('extracting_document', { artifact_id: artifact.id });
+        extracted.push(`## Source ${artifact.id}: ${artifact.name}\n${await ArtifactStore.readArtifact(artifact)}`);
       }
-
-      // Simulate extraction of content from artifacts.
-      // In reality, this would involve downloading from GCS and parsing PDF text.
-      const simulatedContext = `
-        Extracted content from ${this.request.attachments.length} PDFs.
-        Topics likely involve: ${this.request.message}
-      `;
-
-      await this.tracker.emit('analyzing_material', { message: 'Extracting knowledge from sources' });
-
-      // 2. Planning
-      await this.tracker.emit('planning', { message: 'Building study plan' });
-      const planner = new PlannerAgent();
-      const studyPlanJsonStr = await planner.buildStudyPlan(this.request.message, simulatedContext);
-      
-      // Save JSON Artifact
-      await ArtifactStore.saveGeneratedArtifact(
-        this.request.request_id,
-        'study_plan',
-        'study_plan.json',
-        'application/json',
-        studyPlanJsonStr
-      );
-
-      // Create Markdown version
-      const planObj = JSON.parse(studyPlanJsonStr);
-      const studyPlanMd = `# Study Plan: ${planObj.learning_objective}\n\n## Sub-objectives\n${planObj.sub_objectives?.map((o: string) => '- ' + o).join('\n')}\n\n## Sessions\n${planObj.study_sessions?.map((s: any) => '### ' + s.topic + '\nDuration: ' + s.duration_minutes + 'm\n' + s.activities.join(', ')).join('\n\n')}`;
-      
-      await ArtifactStore.saveGeneratedArtifact(
-        this.request.request_id,
-        'study_plan_markdown',
-        'study_plan.md',
-        'text/markdown',
-        studyPlanMd
-      );
-
-      // 3. Document Analysis & Concept Mapping
-      await this.tracker.emit('extracting_concepts', { message: 'Generating concept map' });
-      const analyzer = new DocumentAnalyzerAgent();
-      const conceptMapJsonStr = await analyzer.generateConceptMap(simulatedContext);
-      
-      await ArtifactStore.saveGeneratedArtifact(
-        this.request.request_id,
-        'concept_map',
-        'concept_map.json',
-        'application/json',
-        conceptMapJsonStr
-      );
-
-      // 4. Completion
-      await this.tracker.emit('completed', { message: 'Workflow finished successfully' });
-      await jobRef.update({ status: 'completed' as JobStatus, updated_at: new Date().toISOString() });
-
-    } catch (error: any) {
-      console.error(`[Coordinator] Error in job ${this.request.request_id}:`, error);
-      await this.tracker.emit('failed', { error: error.message || 'Unknown error' });
-      await jobRef.update({ status: 'failed' as JobStatus, updated_at: new Date().toISOString() });
+      if (!extracted.length) throw new Error('At least one source artifact is required');
+      const context = extracted.join('\n\n');
+      await this.assertActive();
+      const conceptMap = await new DocumentAnalyzerAgent().generateConceptMap(
+        context, this.request.attachments.map(a => a.id), this.request.user_id);
+      const conceptArtifact = await ArtifactStore.saveGeneratedArtifact(
+        this.request.request_id, 'concept_map', 'concept_map.json', 'application/json', JSON.stringify(conceptMap, null, 2));
+      await this.assertActive();
+      const plan = await new PlannerAgent().buildStudyPlan(this.request.message, context, this.request.user_id);
+      const planArtifact = await ArtifactStore.saveGeneratedArtifact(
+        this.request.request_id, 'study_plan', 'study_plan.json', 'application/json', JSON.stringify(plan, null, 2));
+      await this.assertActive();
+      await jobRef.update({ status: 'completed' as JobStatus, artifacts: [conceptArtifact, planArtifact],
+        updated_at: new Date().toISOString() });
+      await this.tracker.emit('completed', { artifact_ids: [conceptArtifact.id, planArtifact.id] });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'JOB_CANCELLED') return;
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      await jobRef.update({ status: 'failed' as JobStatus, error: message, updated_at: new Date().toISOString() });
+      await this.tracker.emit('failed', { error: message });
       throw error;
     }
   }

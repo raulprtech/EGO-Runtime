@@ -1,54 +1,57 @@
-import { getFirestore, COLLECTIONS } from './firestore';
+import { createHash, randomUUID } from 'node:crypto';
+import { Storage } from '@google-cloud/storage';
+import { PDFParse } from 'pdf-parse';
 import { Artifact } from '../api/schemas/runtime_schemas';
+import { getFirestore, COLLECTIONS } from './firestore';
+
+const storage = new Storage();
+const maxBytes = Number(process.env.MAX_ARTIFACT_BYTES ?? 20 * 1024 * 1024);
+const maxContextChars = Number(process.env.MAX_CONTEXT_CHARS ?? 250_000);
+
+function parseGsUri(uri: string): { bucket: string; object: string } {
+  const match = /^gs:\/\/([^/]+)\/(.+)$/.exec(uri);
+  if (!match) throw new Error('Artifacts must use gs:// URIs');
+  return { bucket: match[1], object: match[2] };
+}
+function allowedBuckets(): Set<string> {
+  return new Set((process.env.ALLOWED_INPUT_BUCKETS ?? '').split(',').map(v => v.trim()).filter(Boolean));
+}
 
 export class ArtifactStore {
-  static async validateIncomingArtifact(artifact: Artifact): Promise<boolean> {
-    // In a real implementation, this would verify the GCS URI exists,
-    // matches the MIME type, hash, and belongs to the user's allowed bucket list.
-    const allowedMimeTypes = ['application/pdf', 'text/plain', 'text/markdown'];
-    
-    if (!allowedMimeTypes.includes(artifact.mime_type)) {
-      throw new Error(`Unsupported MIME type: ${artifact.mime_type}`);
+  static async readArtifact(artifact: Artifact): Promise<string> {
+    const { bucket, object } = parseGsUri(artifact.uri);
+    const allowed = allowedBuckets();
+    if (allowed.size && !allowed.has(bucket)) throw new Error(`Bucket ${bucket} is not allowed`);
+    const file = storage.bucket(bucket).file(object);
+    const [metadata] = await file.getMetadata();
+    const size = Number(metadata.size ?? 0);
+    if (!size || size > maxBytes) throw new Error(`Artifact size must be between 1 and ${maxBytes} bytes`);
+    if (artifact.size_bytes && artifact.size_bytes !== size) throw new Error('Artifact size mismatch');
+    const [buffer] = await file.download();
+    const digest = createHash('sha256').update(buffer).digest('hex');
+    if (artifact.sha256 && artifact.sha256.toLowerCase() !== digest) throw new Error('Artifact hash mismatch');
+    const detected = metadata.contentType?.split(';')[0];
+    if (detected && detected !== artifact.mime_type) throw new Error(`Artifact MIME mismatch: ${detected}`);
+    if (artifact.mime_type === 'application/pdf') {
+      const parser = new PDFParse({ data: new Uint8Array(buffer) });
+      try { return (await parser.getText()).text.slice(0, maxContextChars); }
+      finally { await parser.destroy(); }
     }
-
-    if (!artifact.uri.startsWith('gs://') && !artifact.uri.startsWith('https://')) {
-      throw new Error(`Invalid URI scheme: ${artifact.uri}`);
-    }
-    
-    // Simulating size limit check
-    console.log(`[ArtifactStore] Validated incoming artifact: ${artifact.name}`);
-    return true;
+    return buffer.toString('utf8', 0, maxContextChars);
   }
 
-  static async saveGeneratedArtifact(
-    requestId: string,
-    type: string,
-    name: string,
-    mimeType: string,
-    content: string
-  ): Promise<Artifact> {
-    const db = getFirestore();
-    const artifactId = `art_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    
-    // In reality, upload `content` to GCS here.
-    // For this prototype, we simulate the URI.
-    const uri = `gs://aria-generated-artifacts/${requestId}/${artifactId}_${name}`;
-    
-    const artifact: Artifact = {
-      id: artifactId,
-      name,
-      mime_type: mimeType,
-      uri
-    };
-
-    await db.collection(COLLECTIONS.ARTIFACTS).doc(artifactId).set({
-      ...artifact,
-      request_id: requestId,
-      created_at: new Date().toISOString(),
-      simulated_content: content.substring(0, 500) // Storing a snippet for debugging in prototype
+  static async saveGeneratedArtifact(requestId: string, type: string, name: string, mimeType: Artifact['mime_type'], content: string): Promise<Artifact> {
+    const bucket = process.env.OUTPUT_BUCKET;
+    if (!bucket) throw new Error('OUTPUT_BUCKET is required');
+    const id = `art_${randomUUID()}`;
+    const object = `${requestId}/${id}/${name}`;
+    const bytes = Buffer.from(content);
+    await storage.bucket(bucket).file(object).save(bytes, { resumable: false, contentType: mimeType });
+    const artifact: Artifact = { id, name, mime_type: mimeType, uri: `gs://${bucket}/${object}`,
+      sha256: createHash('sha256').update(bytes).digest('hex'), size_bytes: bytes.length };
+    await getFirestore().collection(COLLECTIONS.ARTIFACTS).doc(id).create({
+      ...artifact, request_id: requestId, type, created_at: new Date().toISOString(),
     });
-
-    console.log(`[ArtifactStore] Saved generated artifact: ${name} (${artifactId})`);
     return artifact;
   }
 }
