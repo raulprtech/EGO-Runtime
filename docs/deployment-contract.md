@@ -12,4 +12,4 @@ Infrastructure is deliberately outside this repository. A production platform mu
 
 The API service may scale to zero. Durable work is delivered by Cloud Tasks to the worker endpoint. Do not rely on background threads after returning HTTP 202.
 
-See the separately maintained EGO-Deploy repository for one opinionated Google Cloud implementation.
+Olimpo is the separately maintained, runtime-agnostic Google Cloud execution plane. It deploys EGO as one possible runtime; Nigma remains responsible for runtime selection.
