@@ -8,24 +8,15 @@ import { MasteryStateSchema, PracticeSetSchema } from '../../domain/types';
 import { updateMasteryState } from '../../services/mastery';
 import { EventTracker } from '../../runtime/events';
 import { getRuntimeRepository } from '../../services/runtime_repository';
-import { isModelProviderConfigured } from '../../runtime/model_provider';
+import {
+  createLegacyCapabilities, createRuntimeManifest, unsupportedCapabilities,
+} from '../../runtime/manifest';
+import { approvalRequestDigest, createResultReceipt, verifyExecutionApproval } from '../../runtime/integrity';
 
 const router = Router();
 
-router.get('/capabilities', (_req, res) => res.json({
-  runtime: 'ego-runtime',
-  version: '0.6.0',
-  backend: process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local'),
-  model_provider: process.env.MODEL_PROVIDER ?? 'gemini-adk',
-  model_configured: isModelProviderConfigured(),
-  transcription_provider: process.env.TRANSCRIPTION_PROVIDER ?? 'gemini',
-  speech_synthesis_provider: process.env.SPEECH_SYNTHESIS_PROVIDER ?? 'gemini',
-  capabilities: [
-    'education.study_plan', 'education.flashcards', 'education.quiz',
-    'education.feynman', 'education.mastery', 'audio.transcription', 'audio.synthesis',
-    'documents.pdf', 'documents.text', 'artifacts',
-  ],
-}));
+router.get('/manifest', (_req, res) => res.json(createRuntimeManifest()));
+router.get('/capabilities', (_req, res) => res.json(createLegacyCapabilities()));
 
 async function dispatchAndRecord(input: ExecuteRequest): Promise<void> {
   const repository = getRuntimeRepository();
@@ -39,10 +30,24 @@ async function dispatchAndRecord(input: ExecuteRequest): Promise<void> {
   }
 }
 
+router.post('/approval-digest', authMiddleware, (req, res, next) => {
+  try {
+    const input = ExecuteRequestSchema.parse(req.body);
+    res.json({ algorithm: 'sha256', canonicalization: 'json-sort-keys-v1',
+      request_digest: approvalRequestDigest(input) });
+  } catch (error) { next(error); }
+});
+
 router.post('/execute', authMiddleware, async (req, res, next) => {
   try {
     const input = ExecuteRequestSchema.parse(req.body);
-    const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const approval = verifyExecutionApproval(input);
+    if (approval.ok === false) return res.status(approval.status).json({ error: approval.error });
+    const unsupported = unsupportedCapabilities(input.capabilities);
+    if (unsupported.length) return res.status(422).json({
+      error: 'UNSUPPORTED_CAPABILITIES', unsupported_capabilities: unsupported,
+    });
+    const digest = approvalRequestDigest(input);
     const result = await getRuntimeRepository().submit(input, digest);
     if (result.shouldDispatch) await dispatchAndRecord(input);
     res.status(202).json({
@@ -139,6 +144,24 @@ router.get('/:request_id/mastery', authMiddleware, async (req, res, next) => {
     const state = await getRuntimeRepository().getMastery(req.params.request_id);
     if (!state) return res.status(404).json({ error: 'Mastery state not found' });
     res.json(MasteryStateSchema.parse(state));
+  } catch (error) { next(error); }
+});
+
+router.get('/:request_id/receipt', authMiddleware, async (req, res, next) => {
+  try {
+    const job = await getRuntimeRepository().getJob(req.params.request_id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    try {
+      return res.json(createResultReceipt(job));
+    } catch (error) {
+      if (error instanceof Error && error.message === 'RESULT_NOT_TERMINAL') {
+        return res.status(409).json({ error: error.message });
+      }
+      if (error instanceof Error && error.message === 'RESULT_RECEIPT_NOT_CONFIGURED') {
+        return res.status(503).json({ error: error.message });
+      }
+      throw error;
+    }
   } catch (error) { next(error); }
 });
 

@@ -64,6 +64,9 @@ describe('local runtime', () => {
   afterEach(async () => {
     setModelProvider(undefined);
     resetRuntimeRepositoryForTests();
+    delete process.env.RESULT_RECEIPT_SECRET;
+    delete process.env.REQUIRE_EXECUTION_APPROVAL;
+    delete process.env.EXECUTION_APPROVAL_SECRET;
     if (directory) await fs.rm(directory, { recursive: true, force: true });
   });
 
@@ -79,6 +82,8 @@ describe('local runtime', () => {
     process.env.LOCAL_INPUT_ROOT = inputRoot;
     process.env.LOCAL_DATA_DIR = dataRoot;
     process.env.INTERNAL_RUNTIME_TOKEN = 'local-test-token';
+    process.env.REQUIRE_EXECUTION_APPROVAL = 'false';
+    process.env.RESULT_RECEIPT_SECRET = 'local-receipt-secret';
     setModelProvider(fakeProvider);
     resetRuntimeRepositoryForTests();
 
@@ -111,6 +116,12 @@ describe('local runtime', () => {
       expect(job.status).toBe('completed');
       const artifacts = job.artifacts as Array<{ uri: string; name: string }>;
       expect(artifacts).toHaveLength(4);
+      const receiptResponse = await fetch(`${base}/local_request/receipt`, { headers });
+      expect(receiptResponse.ok).toBe(true);
+      const receipt = await receiptResponse.json() as Record<string, unknown>;
+      expect(receipt).toMatchObject({ request_id: 'local_request', status: 'completed', algorithm: 'hmac-sha256' });
+      expect(receipt.signature).toMatch(/^[a-f0-9]{64}$/);
+
       expect(artifacts.every(artifact => artifact.uri.startsWith('file://'))).toBe(true);
 
       const practiceArtifact = artifacts.find(artifact => artifact.name === 'practice_set.json');

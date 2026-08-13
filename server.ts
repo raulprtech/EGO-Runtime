@@ -12,12 +12,14 @@ import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
 import { TaskQueue } from './src/services/task_queue';
 import { isModelProviderConfigured } from './src/runtime/model_provider';
+import {
+  getRuntimeBackend, RUNTIME_ID, RUNTIME_PROTOCOL_VERSION, RUNTIME_VERSION,
+} from './src/runtime/manifest';
 
 const instanceId = randomUUID();
-const protocolVersion = 1;
 
 function backend(): string {
-  return process.env.RUNTIME_BACKEND ?? (process.env.NODE_ENV === 'production' ? 'cloud' : 'local');
+  return getRuntimeBackend();
 }
 
 function provider(): string {
@@ -39,9 +41,9 @@ export async function createApp() {
   app.use(express.json({ limit: '256kb' }));
   app.get('/health', (_req, res) => res.json({
     status: 'ok',
-    runtime: 'ego-runtime',
-    version: '0.6.0',
-    protocol_version: protocolVersion,
+    runtime: RUNTIME_ID,
+    version: RUNTIME_VERSION,
+    protocol_version: RUNTIME_PROTOCOL_VERSION,
     instance_id: instanceId,
     backend: backend(),
     model_provider: provider(),
@@ -112,7 +114,7 @@ if (process.env.NODE_ENV !== 'test') {
   startServer().then(runtime => {
     console.log(JSON.stringify({
       type: 'runtime.ready',
-      protocol_version: protocolVersion,
+      protocol_version: RUNTIME_PROTOCOL_VERSION,
       pid: process.pid,
       instance_id: runtime.instanceId,
       base_url: runtime.baseUrl,

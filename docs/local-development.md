@@ -12,6 +12,8 @@ EGO_MODEL=gemini-3.5-flash
 
 Only the selected provider credentials are required. The bundled hackathon adapter reads `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
 
+Execution approval is disabled locally unless `REQUIRE_EXECUTION_APPROVAL=true`. When enabled, configure `EXECUTION_APPROVAL_SECRET`. Configure the independent `RESULT_RECEIPT_SECRET` to issue terminal signed receipts. Generate both as distinct high-entropy secrets and keep them out of client applications.
+
 ## Start
 
 ```bash

@@ -11,3 +11,4 @@
 9. **Independent speech ports.** Transcription and synthesis providers can evolve separately from learning models and from each other.
 10. **Ephemeral voice data.** Raw audio, transcripts, synthesis text and generated speech are not logged or persisted by voice endpoints.
 11. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.
+12. **Declarative runtime discovery.** EGO publishes a versioned manifest of implemented capabilities and relative entrypoints. External control planes select runtimes; deployment systems only make instances reachable.

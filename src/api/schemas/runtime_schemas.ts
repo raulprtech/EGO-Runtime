@@ -11,6 +11,16 @@ export const ArtifactSchema = z.object({
 });
 export type Artifact = z.infer<typeof ArtifactSchema>;
 
+export const ApprovalEvidenceSchema = z.object({
+  approval_id: z.string().regex(/^[A-Za-z0-9_-]+$/).max(128),
+  approved_by: z.string().min(1).max(256),
+  approved_at: z.iso.datetime(),
+  expires_at: z.iso.datetime(),
+  request_digest: z.string().regex(/^[a-f0-9]{64}$/),
+  signature: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export type ApprovalEvidence = z.infer<typeof ApprovalEvidenceSchema>;
+
 export const ExecuteRequestSchema = z.object({
   request_id: z.string().min(1).max(128),
   user_id: z.string().min(1).max(128),
@@ -19,6 +29,7 @@ export const ExecuteRequestSchema = z.object({
   message: z.string().min(1).max(20_000),
   attachments: z.array(ArtifactSchema).max(20).default([]),
   capabilities: z.array(z.string()).default([]),
+  approval: ApprovalEvidenceSchema.optional(),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
 export type ExecuteRequest = z.infer<typeof ExecuteRequestSchema>;

@@ -3,8 +3,35 @@ import { ExecuteRequestSchema } from '../src/api/schemas/runtime_schemas';
 import { MasteryStateSchema, PracticeSetSchema, StudyPlanSchema } from '../src/domain/types';
 import { isJobClaimable } from '../src/services/job_lifecycle';
 import { updateMasteryState } from '../src/services/mastery';
+import {
+  createRuntimeManifest, RuntimeManifestSchema, unsupportedCapabilities,
+} from '../src/runtime/manifest';
 
 describe('runtime contracts', () => {
+  it('rejects an unsupported runtime backend instead of misadvertising it', () => {
+    const previous = process.env.RUNTIME_BACKEND;
+    process.env.RUNTIME_BACKEND = 'unsupported';
+    expect(() => createRuntimeManifest()).toThrow();
+    if (previous === undefined) delete process.env.RUNTIME_BACKEND;
+    else process.env.RUNTIME_BACKEND = previous;
+  });
+
+  it('publishes a valid, provider-neutral runtime manifest', () => {
+    const manifest = RuntimeManifestSchema.parse(createRuntimeManifest());
+    expect(manifest.runtime_id).toBe('ego-runtime');
+    expect(manifest.protocol.base_path).toBe('/v1/runtime');
+    expect(manifest.capabilities).toContain('education.study_plan');
+    expect(manifest.execution.approval_protocol).toBe(true);
+    expect(manifest.execution.result_receipts).toBe(true);
+    expect(manifest.endpoints.approval_digest).toBe('/approval-digest');
+    expect(manifest.endpoints.receipt).toBe('/:request_id/receipt');
+  });
+
+  it('deduplicates capabilities that this runtime cannot execute', () => {
+    expect(unsupportedCapabilities(['education.quiz', 'unknown.tool', 'unknown.tool']))
+      .toEqual(['unknown.tool']);
+  });
+
   it('defaults optional execute collections', () => {
     const parsed = ExecuteRequestSchema.parse({
       request_id: 'req_123', user_id: 'usr_1', session_id: 'sess_1',

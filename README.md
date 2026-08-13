@@ -44,7 +44,7 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 `ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled hackathon adapters use Gemini, while future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
 
-See [local development](docs/local-development.md), [turn-based audio](docs/turn-based-audio.md), [audio transcription](docs/audio-transcription.md), [speech synthesis](docs/speech-synthesis.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+See [local development](docs/local-development.md), [turn-based audio](docs/turn-based-audio.md), [audio transcription](docs/audio-transcription.md), [speech synthesis](docs/speech-synthesis.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 

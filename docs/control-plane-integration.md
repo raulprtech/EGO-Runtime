@@ -5,10 +5,26 @@ An orchestration layer can discover and invoke EGO without importing runtime cod
 ## Discovery
 
 ```http
-GET /v1/runtime/capabilities
+GET /v1/runtime/manifest
 ```
 
-The response advertises only implemented behavior. The orchestration layer may use it when selecting an execution provider.
+The response advertises only implemented behavior. A control plane may use it as one candidate manifest when selecting an execution provider. Selection policy, endpoint availability and credential issuance remain outside the runtime.
+
+The manifest deliberately separates:
+
+- stable runtime and protocol identity;
+- task capabilities;
+- relative API entrypoints;
+- active provider adapters;
+- execution guarantees and limits.
+
+`GET /v1/runtime/capabilities` remains available as a compatibility endpoint and includes `manifest_url`. New integrations should consume the versioned manifest.
+
+The deployment layer publishes an absolute service endpoint. It must not rewrite capability declarations or choose which runtime receives a task.
+
+## Authorize work
+
+When approval is required, obtain the normalized digest from `POST /v1/runtime/approval-digest`, collect approval outside the runtime, and submit its signed evidence with the execution request. See [execution integrity](execution-integrity.md).
 
 ## Submit work
 
@@ -48,4 +64,4 @@ Content-Type: application/json
 
 The response contains grading feedback and the updated mastery state.
 
-The latest state is available through `GET /v1/runtime/:request_id/mastery`.
+The latest state is available through `GET /v1/runtime/:request_id/mastery`. A control plane can validate the terminal result using `GET /v1/runtime/:request_id/receipt`.

@@ -2,11 +2,13 @@
 
 Base path: `/v1/runtime`.
 
-All endpoints except `capabilities` require the configured application token. A platform IAM layer may additionally authenticate service identities.
+All endpoints except `manifest` and the legacy `capabilities` endpoint require the configured application token. A platform IAM layer may additionally authenticate service identities.
 
 ## Endpoints
 
-- `GET /capabilities` — implemented runtime capabilities.
+- `GET /manifest` — versioned runtime identity, protocol, capabilities, entrypoints and limits.
+- `POST /approval-digest` — normalize a request and return the SHA-256 digest to approve.
+- `GET /capabilities` — backward-compatible capability summary; new discovery clients should use `manifest`.
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /transcriptions` - transcribe one binary audio turn; see [audio transcription](audio-transcription.md).
 - `POST /speech` - synthesize one JSON text response into WAV or PCM; see [speech synthesis](speech-synthesis.md).
@@ -14,9 +16,43 @@ All endpoints except `capabilities` require the configured application token. A 
 - `POST /maintenance/reconcile` — redispatch pending jobs whose initial dispatch failed.
 - `GET /:request_id` — sanitized public job state and artifact references.
 - GET /:request_id/mastery — latest longitudinal concept confidence and review schedule.
+- `GET /:request_id/receipt` — return a deterministic HMAC-signed terminal result receipt.
 - `GET /:request_id/events?cursor=N` — durable ordered events after a cursor.
 - `POST /:request_id/cancel` — cooperative cancellation.
 - `POST /:request_id/assess` — grade quiz responses and update mastery.
+
+## Runtime manifest
+
+`GET /manifest` is the stable discovery surface used by an external control plane to determine whether this runtime can execute a task. It returns relative entrypoints so deployment remains responsible for publishing the absolute base URL.
+
+```json
+{
+  "manifest_version": "1.0",
+  "runtime_id": "ego-runtime",
+  "runtime_version": "0.6.0",
+  "protocol": {
+    "name": "ego-runtime-http",
+    "version": 1,
+    "base_path": "/v1/runtime"
+  },
+  "backend": "local",
+  "supported_backends": ["local", "cloud"],
+  "capabilities": ["education.study_plan", "audio.transcription"],
+  "execution": {
+    "asynchronous": true,
+    "idempotent_submission": true,
+    "durable_events": true,
+    "approval_protocol": true,
+    "result_receipts": true
+  },
+  "integrity": {
+    "approval": { "algorithm": "hmac-sha256", "supported": true, "required": false, "configured": false },
+    "result_receipt": { "algorithm": "hmac-sha256", "supported": true, "configured": false }
+  }
+}
+```
+
+Provider identifiers describe the active adapters; they are not model requirements. Unsupported protocol features are advertised as `false` rather than inferred by callers.
 
 ## Execute request
 
@@ -38,5 +74,7 @@ All endpoints except `capabilities` require the configured application token. A 
   ]
 }
 ```
+
+A request whose `capabilities` contains values absent from the current manifest returns `422` with `UNSUPPORTED_CAPABILITIES` and the deduplicated unsupported values. An empty list remains valid for compatibility.
 
 A successful submission returns `202` with `accepted`, `redispatched` or `already_accepted`. Local mode accepts `file://` inputs inside `LOCAL_INPUT_ROOT`; cloud mode accepts `gs://` inputs.
