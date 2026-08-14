@@ -13,6 +13,9 @@ const fixture = JSON.parse(await fs.readFile(path.resolve(input), 'utf8')) as {
   invocation: Record<string, unknown>;
 };
 const invocation = fixture.invocation;
+const createdAt = new Date(String(invocation.created_at));
+const startedAt = new Date(createdAt.getTime() + 1_000);
+const completedAt = new Date(createdAt.getTime() + 2_000);
 const requestPayload = {
   request_id: invocation.id,
   user_id: 'fixture_learner',
@@ -40,10 +43,10 @@ const receipt = createNigmaRuntimeReceipt({
   request_payload: requestPayload,
   request_digest: 'a'.repeat(64),
   status: 'completed',
-  created_at: '2026-08-14T06:01:31.000Z',
-  started_at: '2026-08-14T06:02:00.000Z',
-  completed_at: '2026-08-14T06:03:00.000Z',
-  updated_at: '2026-08-14T06:03:00.000Z',
+  created_at: createdAt.toISOString(),
+  started_at: startedAt.toISOString(),
+  completed_at: completedAt.toISOString(),
+  updated_at: completedAt.toISOString(),
   attempts: 1,
   artifacts: [
     {

@@ -30,6 +30,8 @@ Approved Nigma work uses the separate `POST /v1/runtime/nigma/invocations` adapt
 
 See [Nigma handoff](nigma-handoff.md) for the exact envelope, allow-list and receipt contract.
 
+A host runtime can complete the feedback loop through `POST /v1/runtime/nigma/host-runs`. It supplies only the approved plan ID, learner routing context and an idempotency key; Nigma creates the invocation and the host-owned route table selects the endpoint. See [Nigma host orchestration](nigma-host-orchestration.md).
+
 ## Submit work
 
 ```http

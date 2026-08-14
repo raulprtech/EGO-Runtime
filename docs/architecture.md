@@ -13,6 +13,8 @@ EGO is a local-first learning runtime invoked through a stable HTTP contract. Ex
   - Other providers can implement the same interface without changing agents or domain services.
 - **Nigma handoff adapter:** validates an immutable Nigma invocation against a runtime-owned exact allow-list, maps it into an ordinary EGO execution, then emits a terminal Nigma receipt.
   - Nigma never bypasses EGO's input confinement, capability checks, idempotency, execution or artifact rules.
+- **Nigma host coordinator:** requests only approval-derived invocations, resolves exact runtime routes from operator-owned configuration and posts terminal receipts back to Nigma.
+  - URLs and credentials never come from Nigma; only HTTPS or loopback HTTP routes are accepted.
 - **Speech synthesis provider port:** converts completed response text into WAV or raw PCM for immediate playback.
   - `gemini`: bundled Gemini 3.1 Flash TTS Preview adapter.
   - Output voice, language and performance style remain request-level options.

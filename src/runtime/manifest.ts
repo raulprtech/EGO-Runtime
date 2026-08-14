@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isModelProviderConfigured } from './model_provider';
 
 export const RUNTIME_ID = 'ego-runtime';
-export const RUNTIME_VERSION = '0.7.0';
+export const RUNTIME_VERSION = '0.8.0';
 export const RUNTIME_PROTOCOL_VERSION = 1;
 export const RUNTIME_MANIFEST_VERSION = '1.0';
 export const RUNTIME_CAPABILITIES = [
@@ -27,6 +27,8 @@ export const RuntimeManifestSchema = z.object({
       protocol: z.literal('nigma.runtime-handoff/v1'),
       supported: z.literal(true),
       configured: z.boolean(),
+      host_orchestration_supported: z.literal(true),
+      host_orchestration_configured: z.boolean(),
     }),
   }),
   providers: z.object({
@@ -83,6 +85,12 @@ export function createRuntimeManifest(): RuntimeManifest {
         supported: true,
         configured: process.env.NIGMA_HANDOFF_ENABLED === 'true'
           && Boolean(process.env.NIGMA_ADAPTER_POLICY_FILE),
+        host_orchestration_supported: true,
+        host_orchestration_configured: Boolean(
+          process.env.NIGMA_CONTROL_PLANE_URL
+          && process.env.NIGMA_CONTROL_PLANE_API_KEY
+          && process.env.NIGMA_HOST_ROUTES_FILE
+        ),
       },
     },
     providers: {

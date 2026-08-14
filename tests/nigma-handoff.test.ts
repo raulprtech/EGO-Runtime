@@ -24,7 +24,7 @@ function policy(): NigmaAdapterPolicy {
   return NigmaAdapterPolicySchema.parse({
     protocol_version: 'nigma.runtime-handoff/v1',
     runtime_id: 'ego-runtime',
-    runtime_version: '0.7.0',
+    runtime_version: '0.8.0',
     allowed_nigma_capabilities: ['educational_execution'],
     allowed_permissions: [
       'execute:approved-tools',
@@ -65,10 +65,10 @@ function invocation(
     approval_id: 'nigma-approval-001',
     runtime_selection_id: 'nigma-runtime-selection-001',
     runtime_selection_digest: '5'.repeat(64),
-    runtime_snapshot_id: 'ego-runtime@0.7.0',
+    runtime_snapshot_id: 'ego-runtime@0.8.0',
     runtime_snapshot_digest: '6'.repeat(64),
     runtime_id: 'ego-runtime',
-    runtime_version: '0.7.0',
+    runtime_version: '0.8.0',
     agent_route: {
       agent_route_id: 'agent-route-001',
       agent_route_digest: '7'.repeat(64),

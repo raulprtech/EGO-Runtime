@@ -30,10 +30,11 @@ describe('Nigma runtime-owned policy file', () => {
     process.env.NIGMA_ADAPTER_POLICY_FILE = file;
 
     await expect(getNigmaAdapterPolicy()).resolves.toMatchObject({
-      runtime_id: 'ego-runtime', runtime_version: '0.7.0',
+      runtime_id: 'ego-runtime', runtime_version: '0.8.0',
     });
     expect(createRuntimeManifest().integrations.nigma).toEqual({
       protocol: 'nigma.runtime-handoff/v1', supported: true, configured: true,
+      host_orchestration_supported: true, host_orchestration_configured: false,
     });
   });
 

@@ -11,6 +11,7 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `GET /capabilities` — backward-compatible capability summary; new discovery clients should use `manifest`.
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
+- `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
 - `GET /nigma/:invocation_id/receipt` — translate a terminal EGO job into a Nigma execution receipt.
 - `POST /transcriptions` - transcribe one binary audio turn; see [audio transcription](audio-transcription.md).
 - `POST /speech` - synthesize one JSON text response into WAV or PCM; see [speech synthesis](speech-synthesis.md).
@@ -31,7 +32,7 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 {
   "manifest_version": "1.0",
   "runtime_id": "ego-runtime",
-  "runtime_version": "0.7.0",
+  "runtime_version": "0.8.0",
   "protocol": {
     "name": "ego-runtime-http",
     "version": 1,
@@ -43,7 +44,9 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
     "nigma": {
       "protocol": "nigma.runtime-handoff/v1",
       "supported": true,
-      "configured": false
+      "configured": false,
+      "host_orchestration_supported": true,
+      "host_orchestration_configured": false
     }
   },
   "capabilities": ["education.study_plan", "audio.transcription"],

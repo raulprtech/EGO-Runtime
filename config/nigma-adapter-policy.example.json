@@ -1,7 +1,7 @@
 {
   "protocol_version": "nigma.runtime-handoff/v1",
   "runtime_id": "ego-runtime",
-  "runtime_version": "0.7.0",
+  "runtime_version": "0.8.0",
   "allowed_nigma_capabilities": [
     "educational_execution"
   ],

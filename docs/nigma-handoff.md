@@ -1,6 +1,6 @@
 # Nigma approved handoff
 
-EGO 0.7.0 can consume the exact `nigma.runtime-handoff/v1` envelope created after Nigma's human approval gate. This integration is disabled by default and does not replace the regular EGO execution API.
+EGO 0.8.0 can consume the exact `nigma.runtime-handoff/v1` envelope created after Nigma's human approval gate. This integration is disabled by default and does not replace the regular EGO execution API.
 
 ## Responsibility boundary
 
@@ -56,6 +56,8 @@ GET /v1/runtime/nigma/:invocation_id/receipt
 ```
 
 The receipt preserves the exact invocation, execution and runtime-snapshot links and returns only hashed artifact references, bounded issues and metrics. Nigma validates and seals it on submission to its existing receipt endpoint.
+
+For the complete plan-to-experience loop, use the separate [host orchestration contract](nigma-host-orchestration.md). The direct invocation endpoint remains useful when another trusted host already owns transport.
 
 ## Authentication limitation
 
