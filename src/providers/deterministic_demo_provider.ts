@@ -4,7 +4,23 @@ import { ModelProvider, StructuredGenerationRequest } from '../runtime/model_pro
 const stopWords = new Set([
   'about', 'against', 'answer', 'como', 'con', 'del', 'desde', 'explain', 'from',
   'into', 'para', 'por', 'que', 'source', 'sobre', 'the', 'this', 'una', 'using',
+  'forma', 'propias', 'palabras', 'propios', 'words',
 ]);
+
+const conceptAliases: Record<string, string[][]> = {
+  nigma: [
+    ['orquestador'],
+    ['modulo', 'decide', 'camino', 'ejecutar', 'tarea'],
+    ['capa', 'selecciona', 'herramientas', 'datos'],
+  ],
+  setup: [['configuracion'], ['instalacion'], ['entorno']],
+  deterministic: [['determinista'], ['reproducible'], ['reglas']],
+  runtime: [['runtime'], ['ejecutor'], ['entorno', 'ejecucion']],
+  selection: [['seleccion'], ['elegir'], ['elige'], ['selecciona'], ['decide'], ['escoge']],
+};
+
+type DeterministicAssessmentReason =
+  'mastered' | 'partial_match' | 'uncertain' | 'insufficient_evidence';
 
 function unique(values: string[]): string[] {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))];
@@ -107,8 +123,45 @@ function practiceSet(prompt: string) {
 }
 
 function tokens(value: string): Set<string> {
-  return new Set(value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9áéíóúüñ]+/gi, ' ')
+  return new Set(value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
     .split(/\s+/).filter(token => token.length > 2 && !stopWords.has(token)));
+}
+
+function isUncertain(value: string): boolean {
+  const normalized = value.toLowerCase().normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  return [
+    'no se', 'no estoy seguro', 'no estoy segura', 'no recuerdo', 'no lo recuerdo',
+    'i do not know', 'i don t know', 'dont know', 'not sure', 'i am not sure',
+  ].includes(normalized);
+}
+
+function matchesExpected(expected: string, actual: Set<string>): boolean {
+  if (actual.has(expected)) return true;
+  return (conceptAliases[expected] ?? []).some(alias => {
+    const hits = alias.filter(token => actual.has(token)).length;
+    const required = alias.length <= 2 ? alias.length : Math.ceil(alias.length * 0.6);
+    return hits >= required;
+  });
+}
+
+function feedbackFor(reason: DeterministicAssessmentReason, spanish: boolean): string {
+  const messages = spanish ? {
+    mastered: 'La respuesta incluye el concepto esperado o una equivalencia calibrada.',
+    partial_match: 'La respuesta recupera parte del concepto; revisa los elementos faltantes.',
+    uncertain: 'La respuesta expresa incertidumbre; vuelve a la fuente antes de intentarlo de nuevo.',
+    insufficient_evidence: 'La respuesta no aporta evidencia suficiente del concepto esperado.',
+  } : {
+    mastered: 'The response includes the expected concept or a calibrated equivalent.',
+    partial_match: 'The response retrieves part of the concept; review the missing elements.',
+    uncertain: 'The response expresses uncertainty; revisit the source before trying again.',
+    insufficient_evidence: 'The response does not provide enough evidence of the expected concept.',
+  };
+  return messages[reason];
 }
 
 function assessment(prompt: string) {
@@ -125,27 +178,34 @@ function assessment(prompt: string) {
     const question = questions.get(response.question_id)!;
     const expected = tokens(question.answer_key);
     const actual = tokens(response.answer);
-    const matched = [...expected].filter(token => actual.has(token));
-    const score = expected.size ? Math.min(1, matched.length / expected.size) : 0;
+    const uncertain = isUncertain(response.answer);
+    const matched = uncertain ? [] : [...expected].filter(token => matchesExpected(token, actual));
+    const score = uncertain || !expected.size ? 0 : Math.min(1, matched.length / expected.size);
+    const reason: DeterministicAssessmentReason = uncertain
+      ? 'uncertain'
+      : score >= 0.8
+        ? 'mastered'
+        : score > 0
+          ? 'partial_match'
+          : 'insufficient_evidence';
     return {
       question_id: response.question_id,
       concept_id: question.concept_id,
       score,
-      feedback: spanish
-        ? score >= 0.8 ? 'La respuesta incluye el concepto esperado.' : 'Revisa la fuente y añade el concepto central.'
-        : score >= 0.8 ? 'The response includes the expected concept.' : 'Review the source and add the central concept.',
-      missing_elements: score >= 0.8 ? [] : [...expected].filter(token => !actual.has(token)),
+      feedback: feedbackFor(reason, spanish),
+      matched_elements: matched,
+      missing_elements: [...expected].filter(token => !matched.includes(token)),
+      reason_code: reason,
     };
   });
+  const mastered = results.filter(item => item.reason_code === 'mastered').length;
+  const uncertain = results.filter(item => item.reason_code === 'uncertain').length;
   return {
     results,
+    calibration_version: 'deterministic-bilingual-v1',
     summary: spanish
-      ? results.every(item => item.score >= 0.8)
-        ? 'Se recuperaron todos los conceptos enviados.'
-        : 'Algunos conceptos necesitan otro repaso basado en la fuente.'
-      : results.every(item => item.score >= 0.8)
-        ? 'All submitted concepts were retrieved.'
-        : 'Some concepts need another source-grounded review.',
+      ? `${mastered} de ${results.length} respuestas dominaron el concepto; ${uncertain} expresaron incertidumbre.`
+      : `${mastered} of ${results.length} responses mastered the concept; ${uncertain} expressed uncertainty.`,
   };
 }
 

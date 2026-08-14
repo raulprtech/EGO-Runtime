@@ -45,7 +45,8 @@ const values: Record<string, unknown> = {
   assessment_grader: {
     results: [1, 2, 3].map(index => ({
       question_id: `q${index}`, concept_id: 'c1', score: 1,
-      feedback: 'Correct', missing_elements: [],
+      feedback: 'Correct', missing_elements: [], matched_elements: ['idea'],
+      reason_code: 'mastered',
     })),
     summary: 'Mastered',
   },

@@ -54,12 +54,23 @@ export const PracticeSetSchema = z.object({
 });
 export type PracticeSet = z.infer<typeof PracticeSetSchema>;
 
+export const AssessmentReasonCodeSchema = z.enum([
+  'mastered',
+  'partial_match',
+  'uncertain',
+  'insufficient_evidence',
+  'provider_scored',
+]);
+
 export const AssessmentResultSchema = z.object({
   results: z.array(z.object({
     question_id: z.string(), concept_id: z.string(), score: z.number().min(0).max(1),
     feedback: z.string(), missing_elements: z.array(z.string()),
+    matched_elements: z.array(z.string()).default([]),
+    reason_code: AssessmentReasonCodeSchema.default('provider_scored'),
   })),
   summary: z.string(),
+  calibration_version: z.string().min(1).optional(),
 });
 export type AssessmentResult = z.infer<typeof AssessmentResultSchema>;
 

@@ -1,0 +1,65 @@
+[
+  {
+    "id": "nigma_function_es",
+    "answer_key": "Nigma",
+    "response": "Es una capa orquestadora que decide qué camino y herramientas usar para ejecutar una tarea.",
+    "language": "es-MX",
+    "expected_reason": "mastered",
+    "min_score": 0.8,
+    "max_score": 1.0
+  },
+  {
+    "id": "local_setup_es",
+    "answer_key": "Local setup",
+    "response": "La configuración local prepara el entorno y ejecuta los servicios en la propia computadora.",
+    "language": "es-MX",
+    "expected_reason": "mastered",
+    "min_score": 0.8,
+    "max_score": 1.0
+  },
+  {
+    "id": "runtime_selection_es",
+    "answer_key": "Deterministic runtime selection",
+    "response": "La selección determinista elige un runtime con reglas reproducibles.",
+    "language": "es-MX",
+    "expected_reason": "mastered",
+    "min_score": 0.8,
+    "max_score": 1.0
+  },
+  {
+    "id": "runtime_selection_partial_es",
+    "answer_key": "Deterministic runtime selection",
+    "response": "El sistema selecciona un runtime.",
+    "language": "es-MX",
+    "expected_reason": "partial_match",
+    "min_score": 0.5,
+    "max_score": 0.79
+  },
+  {
+    "id": "uncertainty_es",
+    "answer_key": "Local setup",
+    "response": "No estoy seguro.",
+    "language": "es-MX",
+    "expected_reason": "uncertain",
+    "min_score": 0,
+    "max_score": 0
+  },
+  {
+    "id": "confident_wrong_es",
+    "answer_key": "Nigma",
+    "response": "Es una base de datos relacional para almacenar fotografías.",
+    "language": "es-MX",
+    "expected_reason": "insufficient_evidence",
+    "min_score": 0,
+    "max_score": 0
+  },
+  {
+    "id": "exact_english",
+    "answer_key": "Deterministic runtime selection",
+    "response": "Deterministic runtime selection uses reproducible rules.",
+    "language": "en-US",
+    "expected_reason": "mastered",
+    "min_score": 0.8,
+    "max_score": 1.0
+  }
+]

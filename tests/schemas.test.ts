@@ -85,7 +85,8 @@ describe('mastery update', () => {
     });
     const updated = updateMasteryState(mastery, {
       summary: 'Good', results: [{ question_id: 'q1', concept_id: 'c1', score: 0.9,
-        feedback: 'Correct', missing_elements: [] }],
+        feedback: 'Correct', missing_elements: [], matched_elements: ['idea'],
+        reason_code: 'mastered' }],
     }, new Date('2026-08-12T00:00:00Z'));
     expect(updated.concepts[0].confidence).toBeCloseTo(0.54);
     expect(updated.concepts[0].attempts).toBe(1);

@@ -42,6 +42,8 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 Assessment requests may declare a BCP47 language. The runtime returns the declared language, bounded per-question scores and updated mastery. Raw learner responses are used transiently for grading but are not retained in local or Firestore attempt records; durable state contains only response count, digest, scores and mastery.
 
+The credential-free provider uses the versioned `deterministic-bilingual-v1` assessment baseline. Results include matched/missing elements and explicit mastery, partial-match, uncertainty or insufficient-evidence reasons. Its reviewed Spanish/English aliases cover the current Nigma demonstration only; this deterministic fallback is not an open-domain semantic grader.
+
 ## Provider extension
 
 `ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled adapters include Gemini+ADK and a credential-free deterministic demo provider; future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
