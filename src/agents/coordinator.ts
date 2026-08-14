@@ -101,7 +101,13 @@ export class Coordinator {
       await this.tracker.emit('completed', { artifact_ids: artifacts.map(item => item.id) });
       return true;
     } catch (error) {
-      if (error instanceof Error && ['JOB_CANCELLED', 'LEASE_LOST'].includes(error.message)) return false;
+      if (error instanceof Error && error.message === 'JOB_CANCELLED') {
+        const rollback = await ArtifactStore.rollbackGeneratedArtifacts(this.request.request_id);
+        await repository.recordRollback(this.request.request_id, rollback);
+        await this.tracker.emit('cancelled', rollback);
+        return false;
+      }
+      if (error instanceof Error && error.message === 'LEASE_LOST') return false;
       const message = error instanceof Error ? error.message : 'Unknown error';
       await JobLifecycle.fail(this.request.request_id, owner, message);
       await this.tracker.emit('failed', { error: message });

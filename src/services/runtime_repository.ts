@@ -21,6 +21,14 @@ export interface AttemptRecord {
   created_at: string;
 }
 
+export interface CancellationRecord {
+  id: string;
+  digest: string;
+  invocation_id: string;
+  invocation_digest: string;
+  runtime_run_id: string;
+}
+
 export interface RuntimeRepository {
   submit(input: ExecuteRequest, digest: string): Promise<{ created: boolean; shouldDispatch: boolean }>;
   recordDispatch(requestId: string, status: 'dispatched' | 'failed', error?: string): Promise<void>;
@@ -30,7 +38,9 @@ export interface RuntimeRepository {
   renew(requestId: string, owner: string, leaseMs: number): Promise<'ok' | 'cancelled' | 'lost'>;
   complete(requestId: string, owner: string, artifacts: Artifact[]): Promise<boolean>;
   fail(requestId: string, owner: string, error: string): Promise<void>;
-  cancel(requestId: string): Promise<'not_found' | 'terminal' | 'cancelled'>;
+  cancel(requestId: string, cancellation?: CancellationRecord): Promise<'not_found' | 'terminal' | 'cancelled'>;
+  deleteArtifactsForRequest(requestId: string): Promise<number>;
+  recordRollback(requestId: string, rollback: Record<string, unknown>): Promise<void>;
   emitEvent(requestId: string, sessionId: string, type: string, data: Record<string, unknown>): Promise<RuntimeEvent>;
   eventsAfter(requestId: string, cursor: number): Promise<RuntimeEvent[]>;
   saveArtifact(artifact: Artifact, requestId: string, type: string): Promise<void>;
@@ -182,16 +192,40 @@ class LocalRuntimeRepository implements RuntimeRepository {
     });
   }
 
-  cancel(requestId: string) {
+  cancel(requestId: string, cancellation?: CancellationRecord) {
     return this.mutate(() => {
       const job = this.state.jobs[requestId];
       if (!job) return 'not_found' as const;
       if (['completed', 'failed'].includes(job.status)) return 'terminal' as const;
+      if (job.cancellation_digest && cancellation && job.cancellation_digest !== cancellation.digest) {
+        throw new Error('CANCELLATION_IDEMPOTENCY_CONFLICT');
+      }
       const now = new Date().toISOString();
       Object.assign(job, { status: 'cancelled', lease_owner: null, lease_expires_at: null,
-        completed_at: now, updated_at: now });
+        completed_at: job.completed_at ?? now, updated_at: now,
+        cancellation_id: cancellation?.id ?? job.cancellation_id,
+        cancellation_digest: cancellation?.digest ?? job.cancellation_digest });
       this.activeJobs.delete(requestId);
       return 'cancelled' as const;
+    });
+  }
+
+  deleteArtifactsForRequest(requestId: string) {
+    return this.mutate(() => {
+      const ids = Object.values(this.state.artifacts)
+        .filter(artifact => artifact.request_id === requestId).map(artifact => artifact.id);
+      for (const id of ids) delete this.state.artifacts[id];
+      const job = this.state.jobs[requestId];
+      if (job) job.artifacts = [];
+      return ids.length;
+    });
+  }
+
+  recordRollback(requestId: string, rollback: Record<string, unknown>) {
+    return this.mutate(() => {
+      const job = this.requireJob(requestId);
+      job.rollback = rollback;
+      job.updated_at = new Date().toISOString();
     });
   }
 
@@ -340,17 +374,37 @@ class FirestoreRuntimeRepository implements RuntimeRepository {
         updated_at: new Date().toISOString() });
     });
   }
-  async cancel(requestId: string) {
+  async cancel(requestId: string, cancellation?: CancellationRecord) {
     const ref = this.job(requestId);
     return this.db.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) return 'not_found' as const;
       if (['completed', 'failed'].includes(snapshot.data()?.status)) return 'terminal' as const;
+      if (snapshot.data()?.cancellation_digest && cancellation &&
+          snapshot.data()?.cancellation_digest !== cancellation.digest) {
+        throw new Error('CANCELLATION_IDEMPOTENCY_CONFLICT');
+      }
       const now = new Date().toISOString();
       transaction.update(ref, { status: 'cancelled', lease_owner: null, lease_expires_at: null,
-        completed_at: now, updated_at: now });
+        completed_at: snapshot.data()?.completed_at ?? now, updated_at: now,
+        cancellation_id: cancellation?.id ?? snapshot.data()?.cancellation_id ?? null,
+        cancellation_digest: cancellation?.digest ?? snapshot.data()?.cancellation_digest ?? null });
       return 'cancelled' as const;
     });
+  }
+  async deleteArtifactsForRequest(requestId: string) {
+    const snapshot = await this.db.collection(COLLECTIONS.ARTIFACTS)
+      .where('request_id', '==', requestId).get();
+    if (!snapshot.empty) {
+      const batch = this.db.batch();
+      snapshot.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+    }
+    await this.job(requestId).update({ artifacts: [] });
+    return snapshot.size;
+  }
+  async recordRollback(requestId: string, rollback: Record<string, unknown>) {
+    await this.job(requestId).update({ rollback, updated_at: new Date().toISOString() });
   }
   async emitEvent(requestId: string, sessionId: string, type: string, data: Record<string, unknown>) {
     const ref = this.job(requestId);

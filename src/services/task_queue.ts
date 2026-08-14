@@ -15,16 +15,19 @@ function isAlreadyExists(error: unknown): boolean {
 
 export class TaskQueue {
   private static readonly activeLocal = new Set<Promise<unknown>>();
+  private static readonly activeLocalByRequest = new Map<string, Promise<unknown>>();
 
   static async dispatch(request: ExecuteRequest): Promise<void> {
     if (backend() === 'local') {
       const task = new Promise<void>(resolve => setImmediate(resolve))
         .then(() => this.dispatchLocal(request));
       this.activeLocal.add(task);
+      this.activeLocalByRequest.set(request.request_id, task);
       void task.catch(error => {
         console.error(`Local job ${request.request_id} failed`, error);
       }).finally(() => {
         this.activeLocal.delete(task);
+        this.activeLocalByRequest.delete(request.request_id);
       });
       return;
     }
@@ -67,6 +70,20 @@ export class TaskQueue {
 
   static activeLocalCount(): number {
     return this.activeLocal.size;
+  }
+
+  static async waitForLocal(requestId: string, timeoutMs: number): Promise<boolean> {
+    const task = this.activeLocalByRequest.get(requestId);
+    if (!task) return true;
+    let timer: NodeJS.Timeout | undefined;
+    const completed = task.then(() => true, () => true);
+    const timedOut = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref();
+    });
+    const result = await Promise.race([completed, timedOut]);
+    if (timer) clearTimeout(timer);
+    return result;
   }
 
   static async drainLocal(timeoutMs: number): Promise<boolean> {

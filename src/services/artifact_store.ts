@@ -98,4 +98,36 @@ export class ArtifactStore {
     await getRuntimeRepository().saveArtifact(artifact, requestId, type);
     return artifact;
   }
+
+  static async rollbackGeneratedArtifacts(requestId: string): Promise<Record<string, unknown>> {
+    const repository = getRuntimeRepository();
+    let storageObjectsRemoved = 0;
+    if (backend() === 'local') {
+      const root = path.resolve(process.env.LOCAL_DATA_DIR ?? '.ego-runtime', 'artifacts');
+      const target = path.resolve(root, requestId);
+      const relative = path.relative(root, target);
+      if (!relative || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        throw new Error('Unsafe rollback artifact path');
+      }
+      try {
+        await fs.rm(target, { recursive: true, force: true });
+        storageObjectsRemoved = 1;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    } else {
+      const bucket = process.env.OUTPUT_BUCKET;
+      if (!bucket) throw new Error('OUTPUT_BUCKET is required');
+      const [files] = await storage.bucket(bucket).getFiles({ prefix: `${requestId}/` });
+      await Promise.all(files.map(file => file.delete({ ignoreNotFound: true })));
+      storageObjectsRemoved = files.length;
+    }
+    const artifactRecordsRemoved = await repository.deleteArtifactsForRequest(requestId);
+    return {
+      performed: true,
+      reason: 'runtime_cancelled',
+      artifact_records_removed: artifactRecordsRemoved,
+      storage_objects_removed: storageObjectsRemoved,
+    };
+  }
 }

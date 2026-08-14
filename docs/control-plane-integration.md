@@ -48,6 +48,13 @@ Repeated requests with the same `request_id` and body are safe. Reusing the iden
 - `GET /v1/runtime/:request_id/events?cursor=0`
 - `POST /v1/runtime/:request_id/cancel`
 
+For a Nigma-managed local run, cancellation accepts a strict `cancellation`
+object containing its immutable ID/digest, invocation ID/digest and runtime run
+ID. The links must all identify the path parameter. A `cancelling` response is
+non-terminal; poll until rollback is durable and status becomes `cancelled`.
+The Nigma receipt is intentionally unavailable before cleanup. Cloud mode
+returns `CANCELLATION_COOPERATIVE_CLOUD_NOT_IMPLEMENTED` before mutation.
+
 Internal request payloads, digests and lease ownership are never returned by the job endpoint.
 
 ## Assess learning

@@ -445,6 +445,12 @@ export function createNigmaRuntimeReceipt(job: JobRecord) {
   if (!['completed', 'failed', 'cancelled'].includes(job.status)) {
     throw new NigmaHandoffError('NIGMA_RESULT_NOT_TERMINAL', 409, 'Runtime job is not terminal');
   }
+  if (job.status === 'cancelled' && !job.rollback) {
+    throw new NigmaHandoffError(
+      'NIGMA_CANCELLATION_NOT_DRAINED', 409,
+      'Cancelled runtime work has not completed cooperative rollback',
+    );
+  }
   const request = job.request_payload as ExecuteRequest | undefined;
   const nigma = request?.metadata?.nigma as Record<string, unknown> | undefined;
   if (!nigma || typeof nigma.invocation_id !== 'string' || typeof nigma.invocation_digest !== 'string') {
@@ -467,6 +473,8 @@ export function createNigmaRuntimeReceipt(job: JobRecord) {
     media_type: item.mime_type,
   }));
   const cancellationContent = canonicalJson({
+    cancellation_id: job.cancellation_id ?? null,
+    cancellation_digest: job.cancellation_digest ?? null,
     invocation_id: nigma.invocation_id,
     status: 'cancelled',
     completed_at: job.completed_at ?? job.updated_at,
@@ -485,8 +493,12 @@ export function createNigmaRuntimeReceipt(job: JobRecord) {
     event_refs: [],
     cancellation_ref: status === 'cancelled'
       ? logicalRef(
-        `ego-event://${job.request_id}/cancelled`, cancellationContent, 'application/json',
+        job.cancellation_id
+          ? `nigma-cancellation://${job.cancellation_id}`
+          : `ego-event://${job.request_id}/cancelled`,
+        cancellationContent, 'application/json',
       ) : null,
+    rollback: status === 'cancelled' ? (job.rollback ?? null) : null,
     assessment_refs: [],
     mastery_refs: artifactRefs.filter(item => item.uri.endsWith('/mastery_state.json')),
     issues: status === 'failed' ? [{
@@ -499,6 +511,5 @@ export function createNigmaRuntimeReceipt(job: JobRecord) {
       artifact_count: artifactRefs.length,
       attempts: Number(job.attempts ?? 0),
     },
-    rollback: null,
   };
 }

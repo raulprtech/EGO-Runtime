@@ -58,6 +58,8 @@ EGO rejects arbitrary remote URLs, confines local inputs to a configured root, r
 
 Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. Exact replay is visible without exposing routes or credentials. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. F5.2 assessment integration declares the requested language and removes raw learner responses from durable attempts; see [the F5.2 result](docs/f5.2-learning-assessment-result-2026-08-14.md). Durable asynchronous host traces, scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
+F5.3 adds local cooperative cancellation for sealed Nigma invocations. EGO reports `cancelling` until its worker drains, removes partial artifact files and records, then exposes a cancelled receipt with the exact Nigma cancellation reference and durable rollback evidence. Cloud cancellation remains fail-closed and unimplemented. See [the F5.3 result](docs/f5.3-runtime-cancellation-result-2026-08-14.md).
+
 ## License
 
 Apache-2.0.

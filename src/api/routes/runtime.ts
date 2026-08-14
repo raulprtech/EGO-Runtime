@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
+import { z } from 'zod';
 import { AssessmentRequestSchema, ExecuteRequest, ExecuteRequestSchema } from '../schemas/runtime_schemas';
 import { authMiddleware } from '../auth';
 import { TaskQueue } from '../../services/task_queue';
@@ -8,12 +9,17 @@ import { MasteryStateSchema, PracticeSetSchema } from '../../domain/types';
 import { updateMasteryState } from '../../services/mastery';
 import { EventTracker } from '../../runtime/events';
 import { getRuntimeRepository } from '../../services/runtime_repository';
+import { ArtifactStore } from '../../services/artifact_store';
 import {
   createLegacyCapabilities, createRuntimeManifest, unsupportedCapabilities,
 } from '../../runtime/manifest';
 import { approvalRequestDigest, createResultReceipt, verifyExecutionApproval } from '../../runtime/integrity';
 
 const router = Router();
+
+export function publicRuntimeStatus(job: { status: string; rollback?: unknown }): string {
+  return job.status === 'cancelled' && !job.rollback ? 'cancelling' : job.status;
+}
 
 router.get('/manifest', (_req, res) => res.json(createRuntimeManifest()));
 router.get('/capabilities', (_req, res) => res.json(createLegacyCapabilities()));
@@ -175,6 +181,7 @@ router.get('/:request_id', authMiddleware, async (req, res, next) => {
     if (!data) return res.status(404).json({ error: 'Job not found' });
     const { request_payload: _payload, request_digest: _digest, lease_owner: _owner,
       lease_expires_at: _expires, ...publicJob } = data;
+    publicJob.status = publicRuntimeStatus(publicJob);
     res.json(publicJob);
   } catch (error) { next(error); }
 });
@@ -188,10 +195,49 @@ router.get('/:request_id/events', authMiddleware, async (req, res, next) => {
 
 router.post('/:request_id/cancel', authMiddleware, async (req, res, next) => {
   try {
-    const result = await getRuntimeRepository().cancel(req.params.request_id);
+    const runtimeBackend = process.env.RUNTIME_BACKEND ??
+      (process.env.NODE_ENV === 'production' ? 'cloud' : 'local');
+    if (runtimeBackend !== 'local') {
+      return res.status(501).json({ error: 'CANCELLATION_COOPERATIVE_CLOUD_NOT_IMPLEMENTED' });
+    }
+    const CancellationSchema = z.object({
+      id: z.string().min(1), digest: z.string().regex(/^[0-9a-f]{64}$/),
+      invocation_id: z.string().min(1), invocation_digest: z.string().regex(/^[0-9a-f]{64}$/),
+      runtime_run_id: z.string().min(1),
+    }).strict();
+    const cancellation = req.body?.cancellation
+      ? CancellationSchema.parse(req.body.cancellation) : undefined;
+    if (cancellation && (cancellation.runtime_run_id !== req.params.request_id ||
+        cancellation.invocation_id !== req.params.request_id)) {
+      return res.status(409).json({ error: 'CANCELLATION_LINK_MISMATCH' });
+    }
+    const repository = getRuntimeRepository();
+    const existingJob = await repository.getJob(req.params.request_id);
+    if (!existingJob) return res.status(404).json({ error: 'Job not found' });
+    const requestPayload = existingJob.request_payload as ExecuteRequest | undefined;
+    const nigma = requestPayload?.metadata?.nigma as Record<string, unknown> | undefined;
+    if (cancellation && nigma?.invocation_digest !== cancellation.invocation_digest) {
+      return res.status(409).json({ error: 'CANCELLATION_DIGEST_MISMATCH' });
+    }
+    const result = await repository.cancel(req.params.request_id, cancellation);
     if (result === 'not_found') return res.status(404).json({ error: 'Job not found' });
     if (result === 'terminal') return res.status(409).json({ error: 'Job already finished' });
-    res.json({ status: 'cancelled' });
+    const timeout = Math.max(100, Math.min(10_000, Number(process.env.CANCELLATION_DRAIN_TIMEOUT_MS ?? 5_000)));
+    const drained = await TaskQueue.waitForLocal(req.params.request_id, timeout);
+    const job = await repository.getJob(req.params.request_id);
+    let rollback = job?.rollback as Record<string, unknown> | undefined;
+    if (!drained && !rollback) {
+      return res.status(202).json({
+        status: 'cancelling', cancellation_id: cancellation?.id ?? null,
+      });
+    }
+    if (!rollback) {
+      rollback = await ArtifactStore.rollbackGeneratedArtifacts(req.params.request_id);
+      rollback.worker_drained = drained;
+      await repository.recordRollback(req.params.request_id, rollback);
+      if (job) await repository.emitEvent(req.params.request_id, job.session_id, 'cancelled', rollback);
+    }
+    res.json({ status: 'cancelled', cancellation_id: cancellation?.id ?? null, rollback });
   } catch (error) { next(error); }
 });
 

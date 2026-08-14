@@ -215,6 +215,11 @@ export class DeterministicDemoProvider implements ModelProvider {
   async generateStructured<T extends z.ZodType>(
     request: StructuredGenerationRequest<T>,
   ): Promise<z.infer<T>> {
+    const delayMs = Math.max(0, Math.min(5_000, Number(process.env.DETERMINISTIC_DEMO_DELAY_MS ?? 0)));
+    const delayAgent = process.env.DETERMINISTIC_DEMO_DELAY_AGENT;
+    if (delayMs && (!delayAgent || delayAgent === request.name)) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
     const value = ({
       document_analyzer: documentAnalysis,
       learning_planner: learningPlan,

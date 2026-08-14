@@ -16,6 +16,8 @@ import {
   validateAndMapNigmaSubmission,
 } from '../src/runtime/nigma_handoff';
 import { resetRuntimeRepositoryForTests } from '../src/services/runtime_repository';
+import { ModelProvider, setModelProvider, StructuredGenerationRequest } from '../src/runtime/model_provider';
+import { publicRuntimeStatus } from '../src/api/routes/runtime';
 
 const pluginDigest = '1'.repeat(64);
 const providerDigest = '2'.repeat(64);
@@ -119,6 +121,40 @@ const learner = {
   objective_id: 'objective_1',
 };
 
+const cancellationProvider: ModelProvider = {
+  id: 'cancellation-test',
+  async generateStructured<T extends import('zod').z.ZodType>(
+    request: StructuredGenerationRequest<T>,
+  ): Promise<import('zod').z.infer<T>> {
+    if (request.name === 'learning_planner') {
+      await new Promise(resolve => setTimeout(resolve, 3_000));
+    }
+    const values: Record<string, unknown> = {
+      document_analyzer: {
+        nodes: [{ id: 'c1', label: 'Core idea', type: 'concept', source_artifact_ids: ['source_1'] }],
+        edges: [],
+      },
+      learning_planner: {
+        learning_objective: 'Understand the source', sub_objectives: ['Explain'],
+        required_concepts: ['Core idea'], dependencies: [], estimated_difficulty: 'introductory',
+        study_sessions: [{ id: 's1', topic: 'Core idea', duration_minutes: 25,
+          technique: 'feynman', activities: ['Read'], completion_criteria: ['Explain'] }],
+        review_cadence_days: [1, 3, 7], mastery_criteria: ['Score 0.8'], deliverables: ['Explanation'],
+      },
+      practice_designer: {
+        session: { title: 'Session', focus_minutes: 25, feynman_prompt: 'Explain',
+          completion_criteria: ['Complete'] },
+        flashcards: [1, 2, 3].map(index => ({ id: `f${index}`, concept_id: 'c1',
+          front: `Front ${index}`, back: `Back ${index}`, source_artifact_ids: ['source_1'] })),
+        quiz: [1, 2, 3].map(index => ({ id: `q${index}`, concept_id: 'c1',
+          prompt: `Question ${index}`, answer_key: 'Core idea', rubric: ['Core idea'],
+          source_artifact_ids: ['source_1'] })),
+      },
+    };
+    return request.schema.parse(values[request.name]);
+  },
+};
+
 describe('Nigma approved handoff', () => {
   let directory = '';
   let closeServer: (() => Promise<void>) | undefined;
@@ -127,16 +163,22 @@ describe('Nigma approved handoff', () => {
     await closeServer?.();
     closeServer = undefined;
     setNigmaAdapterPolicyForTests(undefined);
+    setModelProvider(undefined);
     resetRuntimeRepositoryForTests();
     delete process.env.NIGMA_HANDOFF_ENABLED;
     delete process.env.NIGMA_ADAPTER_POLICY_FILE;
     delete process.env.INTERNAL_RUNTIME_TOKEN;
     delete process.env.MODEL_PROVIDER;
+    delete process.env.DETERMINISTIC_DEMO_DELAY_MS;
+    delete process.env.DETERMINISTIC_DEMO_DELAY_AGENT;
+    delete process.env.CANCELLATION_DRAIN_TIMEOUT_MS;
     if (directory) await fs.rm(directory, { recursive: true, force: true });
     directory = '';
   });
 
   it('maps only an intact, live and allowlisted route', () => {
+    expect(publicRuntimeStatus({ status: 'cancelled' })).toBe('cancelling');
+    expect(publicRuntimeStatus({ status: 'cancelled', rollback: { performed: true } })).toBe('cancelled');
     const valid = invocation();
     const mapped = validateAndMapNigmaSubmission(
       { invocation: valid, learner_context: learner }, policy(), new Date(),
@@ -240,6 +282,100 @@ describe('Nigma approved handoff', () => {
     });
     expect(changedLearner.status).toBe(409);
     await expect(changedLearner.json()).resolves.toEqual({ error: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('cooperatively cancels partial work, rolls artifacts back, and returns linked evidence', async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ego-nigma-cancel-'));
+    const inputRoot = path.join(directory, 'inputs');
+    const dataRoot = path.join(directory, 'data');
+    await fs.mkdir(inputRoot);
+    const source = path.join(inputRoot, 'source.md');
+    await fs.writeFile(source, '# Core idea\nA concise trusted learning source.');
+    Object.assign(process.env, {
+      RUNTIME_BACKEND: 'local', LOCAL_INPUT_ROOT: inputRoot, LOCAL_DATA_DIR: dataRoot,
+      INTERNAL_RUNTIME_TOKEN: 'nigma-test-token', NIGMA_HANDOFF_ENABLED: 'true',
+      MODEL_PROVIDER: 'deterministic-demo',
+      CANCELLATION_DRAIN_TIMEOUT_MS: '100',
+    });
+    setNigmaAdapterPolicyForTests(policy());
+    setModelProvider(cancellationProvider);
+    resetRuntimeRepositoryForTests();
+
+    const app = await createApp();
+    const server = app.listen(0);
+    await new Promise<void>(resolve => server.once('listening', resolve));
+    closeServer = () => new Promise<void>((resolve, reject) =>
+      server.close(error => error ? reject(error) : resolve()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/runtime`;
+    const headers = { Authorization: 'Bearer nigma-test-token', 'Content-Type': 'application/json' };
+    const approved = invocation(pathToFileURL(source).href);
+    const accepted = await fetch(`${base}/nigma/invocations`, {
+      method: 'POST', headers, body: JSON.stringify({ invocation: approved, learner_context: learner }),
+    });
+    expect(accepted.status).toBe(202);
+
+    const artifactRoot = path.join(dataRoot, 'artifacts', approved.id);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try {
+        if ((await fs.readdir(artifactRoot)).length) break;
+      } catch { /* worker has not emitted its first partial artifact */ }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect((await fs.readdir(artifactRoot)).length).toBeGreaterThan(0);
+
+    const cancellation = {
+      id: 'nigma-cancel-001', digest: 'a'.repeat(64),
+      invocation_id: approved.id, invocation_digest: approved.digest,
+      runtime_run_id: approved.id,
+    };
+    const wrongDigest = await fetch(`${base}/${approved.id}/cancel`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ cancellation: { ...cancellation, invocation_digest: 'f'.repeat(64) } }),
+    });
+    expect(wrongDigest.status).toBe(409);
+    await expect(wrongDigest.json()).resolves.toEqual({ error: 'CANCELLATION_DIGEST_MISMATCH' });
+    const cancelled = await fetch(`${base}/${approved.id}/cancel`, {
+      method: 'POST', headers, body: JSON.stringify({ cancellation }),
+    });
+    expect([200, 202]).toContain(cancelled.status);
+    const cancellationResult = await cancelled.json() as Record<string, unknown>;
+    expect(cancellationResult).toMatchObject({ cancellation_id: cancellation.id });
+    if (cancelled.status === 202) {
+      expect(cancellationResult.status).toBe('cancelling');
+      const prematureReceipt = await fetch(`${base}/nigma/${approved.id}/receipt`, { headers });
+      expect(prematureReceipt.status).toBe(409);
+    } else {
+      expect(cancellationResult).toMatchObject({
+        status: 'cancelled', rollback: { performed: true },
+      });
+    }
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const status = await fetch(`${base}/${approved.id}`, { headers });
+      const value = await status.json() as Record<string, unknown>;
+      if (value.status === 'cancelled') break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const receiptResponse = await fetch(`${base}/nigma/${approved.id}/receipt`, { headers });
+    const receipt = await receiptResponse.json() as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      status: 'cancelled', artifacts: [], rollback: { performed: true },
+      cancellation_ref: { uri: `nigma-cancellation://${cancellation.id}` },
+    });
+    const durable = JSON.parse(await fs.readFile(path.join(dataRoot, 'state.json'), 'utf8')) as {
+      artifacts: Record<string, unknown>; jobs: Record<string, Record<string, unknown>>;
+    };
+    expect(durable.artifacts).toEqual({});
+    expect(durable.jobs[approved.id].cancellation_digest).toBe(cancellation.digest);
+
+    const replay = await fetch(`${base}/${approved.id}/cancel`, {
+      method: 'POST', headers, body: JSON.stringify({ cancellation }),
+    });
+    expect(replay.ok).toBe(true);
+    await expect(replay.json()).resolves.toMatchObject({
+      status: 'cancelled', cancellation_id: cancellation.id,
+    });
   });
 
   it('keeps the integration closed when it is not explicitly enabled', async () => {
