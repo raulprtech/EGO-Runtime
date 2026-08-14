@@ -9,7 +9,10 @@ EGO is a local-first learning runtime invoked through a stable HTTP contract. Ex
   - `cloud`: Firestore state with GCS artifacts.
 - **Model provider port:** schema-constrained structured generation.
   - `gemini-adk`: bundled hackathon adapter using Google ADK and Gemini.
+  - `deterministic-demo`: credential-free, source-derived integration fallback; not a semantic replacement for Gemini.
   - Other providers can implement the same interface without changing agents or domain services.
+- **Nigma handoff adapter:** validates an immutable Nigma invocation against a runtime-owned exact allow-list, maps it into an ordinary EGO execution, then emits a terminal Nigma receipt.
+  - Nigma never bypasses EGO's input confinement, capability checks, idempotency, execution or artifact rules.
 - **Speech synthesis provider port:** converts completed response text into WAV or raw PCM for immediate playback.
   - `gemini`: bundled Gemini 3.1 Flash TTS Preview adapter.
   - Output voice, language and performance style remain request-level options.

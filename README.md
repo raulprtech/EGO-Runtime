@@ -21,11 +21,11 @@ Account-specific deployment topology and proprietary client or orchestration cod
 
 ## Run locally
 
-Local mode needs Node 22.3+ and a key for the configured model provider. It does not need Firestore, GCS, Application Default Credentials or Cloud Tasks.
+Local mode needs Node 22.3+. Gemini requires its API key; the deterministic demo provider runs without credentials. Neither path needs Firestore, GCS, Application Default Credentials or Cloud Tasks.
 
 ```bash
 cp .env.example .env
-# Add GEMINI_API_KEY to .env
+# Add GEMINI_API_KEY, or set MODEL_PROVIDER=deterministic-demo for the local demo
 npm ci --legacy-peer-deps
 npm run lint
 npm test
@@ -42,9 +42,9 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 ## Provider extension
 
-`ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled hackathon adapters use Gemini, while future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
+`ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled adapters include Gemini+ADK and a credential-free deterministic demo provider; future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
 
-See [local development](docs/local-development.md), [turn-based audio](docs/turn-based-audio.md), [audio transcription](docs/audio-transcription.md), [speech synthesis](docs/speech-synthesis.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+See [local development](docs/local-development.md), [Nigma handoff](docs/nigma-handoff.md), [deterministic demo provider](docs/deterministic-demo-provider.md), [turn-based audio](docs/turn-based-audio.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 
@@ -52,7 +52,7 @@ EGO rejects arbitrary remote URLs, confines local inputs to a configured root, r
 
 ## Status
 
-Version 0.6 is a local-first, turn-based audio hackathon vertical slice. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.7 adds a strict, runtime-owned Nigma invocation adapter, deterministic terminal receipts and a credential-free end-to-end provider for integration tests. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 

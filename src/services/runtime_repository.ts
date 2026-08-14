@@ -143,6 +143,7 @@ class LocalRuntimeRepository implements RuntimeRepository {
       const now = new Date();
       Object.assign(job, { status: 'running', lease_owner: owner,
         lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(),
+        started_at: job.started_at ?? now.toISOString(),
         attempts: Number(job.attempts ?? 0) + 1, updated_at: now.toISOString() });
       return true;
     });
@@ -186,8 +187,9 @@ class LocalRuntimeRepository implements RuntimeRepository {
       const job = this.state.jobs[requestId];
       if (!job) return 'not_found' as const;
       if (['completed', 'failed'].includes(job.status)) return 'terminal' as const;
+      const now = new Date().toISOString();
       Object.assign(job, { status: 'cancelled', lease_owner: null, lease_expires_at: null,
-        updated_at: new Date().toISOString() });
+        completed_at: now, updated_at: now });
       this.activeJobs.delete(requestId);
       return 'cancelled' as const;
     });
@@ -302,6 +304,7 @@ class FirestoreRuntimeRepository implements RuntimeRepository {
       const now = new Date();
       transaction.update(ref, { status: 'running', lease_owner: owner,
         lease_expires_at: new Date(now.getTime() + leaseMs).toISOString(),
+        started_at: data.started_at ?? now.toISOString(),
         attempts: Number(data.attempts ?? 0) + 1, updated_at: now.toISOString() });
       return true;
     });
@@ -342,7 +345,9 @@ class FirestoreRuntimeRepository implements RuntimeRepository {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) return 'not_found' as const;
       if (['completed', 'failed'].includes(snapshot.data()?.status)) return 'terminal' as const;
-      transaction.update(ref, { status: 'cancelled', lease_owner: null, lease_expires_at: null, updated_at: new Date().toISOString() });
+      const now = new Date().toISOString();
+      transaction.update(ref, { status: 'cancelled', lease_owner: null, lease_expires_at: null,
+        completed_at: now, updated_at: now });
       return 'cancelled' as const;
     });
   }

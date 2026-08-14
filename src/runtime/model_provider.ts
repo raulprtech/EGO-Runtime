@@ -30,6 +30,7 @@ export function isModelProviderConfigured(): boolean {
     const vertex = process.env.GOOGLE_GENAI_USE_VERTEXAI === 'TRUE' && Boolean(process.env.GOOGLE_CLOUD_PROJECT);
     return apiKey || vertex;
   }
+  if (provider === 'deterministic-demo') return true;
   return false;
 }
 
@@ -39,6 +40,10 @@ export async function getModelProvider(): Promise<ModelProvider> {
   if (provider === 'gemini-adk') {
     const { GeminiAdkProvider } = await import('../providers/gemini_adk_provider');
     return new GeminiAdkProvider();
+  }
+  if (provider === 'deterministic-demo') {
+    const { DeterministicDemoProvider } = await import('../providers/deterministic_demo_provider');
+    return new DeterministicDemoProvider();
   }
   throw new Error(`Unsupported MODEL_PROVIDER: ${provider}`);
 }

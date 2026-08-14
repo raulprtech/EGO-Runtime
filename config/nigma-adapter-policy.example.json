@@ -1,0 +1,46 @@
+{
+  "protocol_version": "nigma.runtime-handoff/v1",
+  "runtime_id": "ego-runtime",
+  "runtime_version": "0.7.0",
+  "allowed_nigma_capabilities": [
+    "educational_execution"
+  ],
+  "allowed_permissions": [
+    "execute:approved-tools",
+    "read:referenced-inputs",
+    "read:referenced-learning-materials",
+    "read:referenced-metadata",
+    "transform:bounded",
+    "write:bounded-artifacts"
+  ],
+  "allowed_output_types": [
+    "study_plan"
+  ],
+  "plugins": [
+    {
+      "snapshot_id": "nigma-study@0.1.0",
+      "snapshot_digest": "f97f93f49ed5f53db9aa0ba81d47b7685afba92c5c95f14b5219ac85d4a4130d",
+      "runtime_capabilities": [
+        "artifacts",
+        "documents.text",
+        "education.study_plan"
+      ]
+    }
+  ],
+  "providers": [
+    {
+      "snapshot_id": "local-files@1.0.0",
+      "snapshot_digest": "a438577ded29458a36d7cd9e008e072c6d3eddde1588ffc1c5df4aa791d1e225",
+      "uri_schemes": [
+        "file"
+      ]
+    }
+  ],
+  "bindings": [
+    {
+      "plugin_snapshot_id": "nigma-study@0.1.0",
+      "provider_snapshot_id": "local-files@1.0.0",
+      "capability": "learning_material_reader"
+    }
+  ]
+}

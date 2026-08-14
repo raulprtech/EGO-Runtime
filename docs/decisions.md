@@ -12,3 +12,5 @@
 10. **Ephemeral voice data.** Raw audio, transcripts, synthesis text and generated speech are not logged or persisted by voice endpoints.
 11. **Neutral integration contract.** Proprietary orchestration, client and deployment implementations are intentionally outside this repository.
 12. **Declarative runtime discovery.** EGO publishes a versioned manifest of implemented capabilities and relative entrypoints. External control planes select runtimes; deployment systems only make instances reachable.
+13. **Runtime-owned Nigma policy.** Nigma proposes an immutable route, but EGO independently admits only exact plugin, provider, binding, permission and input combinations configured by the runtime owner.
+14. **Deterministic fallback is evidence infrastructure.** The credential-free provider proves transport, grounding, persistence, receipts and replay locally; it does not claim semantic parity with Gemini or replace model-backed tutoring evaluation.

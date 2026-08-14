@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isModelProviderConfigured } from './model_provider';
 
 export const RUNTIME_ID = 'ego-runtime';
-export const RUNTIME_VERSION = '0.6.0';
+export const RUNTIME_VERSION = '0.7.0';
 export const RUNTIME_PROTOCOL_VERSION = 1;
 export const RUNTIME_MANIFEST_VERSION = '1.0';
 export const RUNTIME_CAPABILITIES = [
@@ -22,6 +22,13 @@ export const RuntimeManifestSchema = z.object({
   }),
   backend: z.enum(['local', 'cloud']),
   supported_backends: z.array(z.enum(['local', 'cloud'])).min(1),
+  integrations: z.object({
+    nigma: z.object({
+      protocol: z.literal('nigma.runtime-handoff/v1'),
+      supported: z.literal(true),
+      configured: z.boolean(),
+    }),
+  }),
   providers: z.object({
     model: z.object({ id: z.string().min(1), configured: z.boolean() }),
     transcription: z.object({ id: z.string().min(1) }),
@@ -70,6 +77,14 @@ export function createRuntimeManifest(): RuntimeManifest {
     protocol: { name: 'ego-runtime-http', version: RUNTIME_PROTOCOL_VERSION, base_path: '/v1/runtime' },
     backend: getRuntimeBackend(),
     supported_backends: ['local', 'cloud'],
+    integrations: {
+      nigma: {
+        protocol: 'nigma.runtime-handoff/v1',
+        supported: true,
+        configured: process.env.NIGMA_HANDOFF_ENABLED === 'true'
+          && Boolean(process.env.NIGMA_ADAPTER_POLICY_FILE),
+      },
+    },
     providers: {
       model: { id: process.env.MODEL_PROVIDER ?? 'gemini-adk', configured: isModelProviderConfigured() },
       transcription: { id: process.env.TRANSCRIPTION_PROVIDER ?? 'gemini' },

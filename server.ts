@@ -8,6 +8,7 @@ import cors from 'cors';
 import runtimeRoutes from './src/api/routes/runtime';
 import transcriptionRoutes from './src/api/routes/transcription';
 import speechRoutes from './src/api/routes/speech';
+import nigmaRoutes from './src/api/routes/nigma';
 import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
 import { TaskQueue } from './src/services/task_queue';
@@ -52,6 +53,7 @@ export async function createApp() {
   }));
   app.use('/v1/runtime/transcriptions', transcriptionRoutes);
   app.use('/v1/runtime/speech', speechRoutes);
+  app.use('/v1/runtime/nigma', nigmaRoutes);
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });

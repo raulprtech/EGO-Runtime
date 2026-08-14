@@ -1,0 +1,43 @@
+{
+  "invocation_id": "21626e3e-d33f-4831-b6e3-8f6e827e4790",
+  "invocation_digest": "f1ef298deb47858dda4fa877579d248d3a042d6cfd877d35a21cdf2e8cef7691",
+  "execution_id": "f4dd10e5-a84a-4407-bc48-ef39f6868513",
+  "runtime_snapshot_id": "ego-runtime@0.7.0",
+  "runtime_snapshot_digest": "d167af1ef5018d7c7c497067c6bd9373c8ddd04c80c5e95a5cd3c37adec99ff2",
+  "runtime_run_id": "21626e3e-d33f-4831-b6e3-8f6e827e4790",
+  "status": "succeeded",
+  "started_at": "2026-08-14T06:02:00.000Z",
+  "completed_at": "2026-08-14T06:03:00.000Z",
+  "artifacts": [
+    {
+      "uri": "file:///controlled/output/study_plan.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 512,
+      "media_type": "application/json"
+    },
+    {
+      "uri": "file:///controlled/output/mastery_state.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size_bytes": 256,
+      "media_type": "application/json"
+    }
+  ],
+  "event_refs": [],
+  "cancellation_ref": null,
+  "assessment_refs": [],
+  "mastery_refs": [
+    {
+      "uri": "file:///controlled/output/mastery_state.json",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "size_bytes": 256,
+      "media_type": "application/json"
+    }
+  ],
+  "issues": [],
+  "cost": {},
+  "metrics": {
+    "artifact_count": 2,
+    "attempts": 1
+  },
+  "rollback": null
+}

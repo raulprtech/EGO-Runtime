@@ -26,6 +26,10 @@ The deployment layer publishes an absolute service endpoint. It must not rewrite
 
 When approval is required, obtain the normalized digest from `POST /v1/runtime/approval-digest`, collect approval outside the runtime, and submit its signed evidence with the execution request. See [execution integrity](execution-integrity.md).
 
+Approved Nigma work uses the separate `POST /v1/runtime/nigma/invocations` adapter. EGO validates Nigma's sealed route against its own local policy and then maps it into the same execution path. The adapter must not reinterpret or manufacture an EGO approval for a different request.
+
+See [Nigma handoff](nigma-handoff.md) for the exact envelope, allow-list and receipt contract.
+
 ## Submit work
 
 ```http
