@@ -1,13 +1,13 @@
 {
-  "invocation_id": "8456a5a7-1a92-4d5c-ada1-13c98e9e7208",
-  "invocation_digest": "2ae5abacd79be87d803fa8ae87f7cbe9dd62d5f03443d90bf83c179764b48b62",
-  "execution_id": "bb967dbd-5c3b-4f8c-b171-708d72203ae8",
-  "runtime_snapshot_id": "ego-runtime@0.8.0",
-  "runtime_snapshot_digest": "9eda457e0c70adb4ad3bc1f8133ec564f31ed44a7fea84eb6df02c7951323d82",
-  "runtime_run_id": "8456a5a7-1a92-4d5c-ada1-13c98e9e7208",
+  "invocation_id": "5afd9127-dcc1-4e8a-bedc-bde580c1333e",
+  "invocation_digest": "c3c2044ef35ad794eaaa6ebb97e2651cd4110cb55abaddef59aa6b932827adf7",
+  "execution_id": "6d38c03f-c465-4898-9eff-1280e96499ca",
+  "runtime_snapshot_id": "ego-runtime@0.9.0",
+  "runtime_snapshot_digest": "928e6d30260e5d4473d41025906d22f483752873e5c03205574d24976aa5d10d",
+  "runtime_run_id": "5afd9127-dcc1-4e8a-bedc-bde580c1333e",
   "status": "succeeded",
-  "started_at": "2026-08-14T06:51:55.694Z",
-  "completed_at": "2026-08-14T06:51:56.694Z",
+  "started_at": "2026-08-14T07:29:45.355835Z",
+  "completed_at": "2026-08-14T07:29:46.355835Z",
   "artifacts": [
     {
       "uri": "file:///controlled/output/study_plan.json",

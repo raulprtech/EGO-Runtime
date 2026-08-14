@@ -24,7 +24,7 @@ describe('Nigma Python interoperability fixture', () => {
         session_id: 'fixture_session',
         objective_id: 'fixture_objective',
       },
-    }, policy, new Date('2026-08-14T07:00:00.000Z'));
+    }, policy, new Date(Date.parse(invocation.created_at) + 30_000));
     expect(mapped).toMatchObject({
       request_id: invocation.id,
       message: invocation.objective,

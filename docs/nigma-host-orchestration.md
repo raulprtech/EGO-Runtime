@@ -1,6 +1,6 @@
 # Nigma host orchestration
 
-EGO 0.8 can act as a reference host runtime for an already approved Nigma plan. The host requests the immutable invocation, routes it to an exact runtime identity/version, waits for a terminal state, retrieves the bounded receipt and posts that receipt back to Nigma.
+EGO 0.9 can act as a reference host runtime for an already approved Nigma plan. The host requests the immutable invocation, routes it to an exact runtime identity/version, waits for a terminal state, retrieves the bounded receipt and posts that receipt back to Nigma.
 
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
@@ -32,7 +32,7 @@ The host reads `NIGMA_HOST_ROUTES_FILE`. Each entry binds one exact `runtime_id@
   "routes": [
     {
       "runtime_id": "ego-runtime",
-      "runtime_version": "0.8.0",
+      "runtime_version": "0.9.0",
       "base_url": "http://127.0.0.1:3000/v1/runtime",
       "credential_env": "NIGMA_RUNTIME_TOKEN_EGO"
     }
@@ -53,6 +53,19 @@ NIGMA_RUNTIME_TOKEN_EGO=<host-to-runtime-secret>
 
 `NIGMA_HOST_TIMEOUT_MS` is bounded to 1–120 seconds and defaults to 30 seconds. A host timeout does not manufacture a failure receipt or cancel an otherwise valid runtime job. A retry with the same plan, learner context and `Idempotency-Key` resumes through Nigma's invocation idempotency, EGO's mapped-request idempotency and Nigma's receipt reconciliation.
 
+## Neutral progress result
+
+EGO 0.9 returns `protocol_version=nigma.host-run-result/v1`, a stable
+`host_run_id` and the ordered `nigma.host-event/v1` lifecycle:
+
+`request_received → invocation_authorized → runtime_routed → runtime_accepted → runtime_terminal → receipt_observed → receipt_recorded → run_completed`.
+
+Every later event repeats the exact sealed links already known at that stage.
+Runtime replay marks `runtime_accepted.replayed=true`. Events contain no URL,
+credential or environment-variable name. Nigma's independent offline verifier
+and JSON-stdio fixture define the replaceable boundary; EGO is only its first
+live implementation.
+
 ## Current limitation
 
-The reference endpoint is synchronous and intended for local integration. A production or long-running host should persist host-run state and expose asynchronous status/events. Remote deployment also requires platform service authentication or a signed-envelope protocol; SHA-256 alone authenticates no sender.
+The reference endpoint is synchronous and intended for local integration. Successful progress is returned with the final response; partial failure traces are not durable yet. A production or long-running host should persist host-run state and expose asynchronous status/events. Remote deployment also requires platform service authentication or a signed-envelope protocol; SHA-256 alone authenticates no sender.

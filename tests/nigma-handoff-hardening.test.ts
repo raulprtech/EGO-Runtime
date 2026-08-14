@@ -47,7 +47,8 @@ describe('Nigma handoff hardening', () => {
         session_id: 'fixture_session',
         objective_id: 'fixture_objective',
       },
-    }, NigmaAdapterPolicySchema.parse(value.ego_policy), new Date('2026-08-14T07:00:00Z')))
+    }, NigmaAdapterPolicySchema.parse(value.ego_policy),
+    new Date(Date.parse(resealed.created_at) + 30_000)))
       .toThrowError(expect.objectContaining({ code: 'NIGMA_ROUTE_INVALID' }));
   });
 

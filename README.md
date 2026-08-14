@@ -44,7 +44,7 @@ Local state and generated artifacts are written under `.ego-runtime/`. Inputs mu
 
 `ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled adapters include Gemini+ADK and a credential-free deterministic demo provider; future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
 
-See [local development](docs/local-development.md), [Nigma handoff](docs/nigma-handoff.md), [Nigma host orchestration](docs/nigma-host-orchestration.md), [deterministic demo provider](docs/deterministic-demo-provider.md), [turn-based audio](docs/turn-based-audio.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
+See [local development](docs/local-development.md), [Nigma handoff](docs/nigma-handoff.md), [Nigma host orchestration](docs/nigma-host-orchestration.md), [F4.6 host events](docs/f4.6-runtime-neutral-host-events-result-2026-08-14.md), [deterministic demo provider](docs/deterministic-demo-provider.md), [turn-based audio](docs/turn-based-audio.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
 ## Security
 
@@ -52,7 +52,7 @@ EGO rejects arbitrary remote URLs, confines local inputs to a configured root, r
 
 ## Status
 
-Version 0.8 adds a host-owned Nigma orchestration loop: approved invocation transport, exact runtime routing, terminal receipt return and idempotent experience feedback. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. Scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. Exact replay is visible without exposing routes or credentials. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. Durable asynchronous host traces, the real Hermes bridge, scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 

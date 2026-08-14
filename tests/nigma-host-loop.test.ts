@@ -144,13 +144,24 @@ describe('Nigma host feedback loop', () => {
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
+      protocol_version: 'nigma.host-run-result/v1',
       plan_id: invocation.plan_id,
       invocation_id: invocation.id,
       runtime_id: 'ego-runtime',
-      runtime_version: '0.8.0',
+      runtime_version: '0.9.0',
       runtime_submission_status: 'accepted',
       receipt_id: 'accepted-receipt-1',
       status: 'succeeded',
+      events: [
+        { sequence: 1, kind: 'request_received' },
+        { sequence: 2, kind: 'invocation_authorized' },
+        { sequence: 3, kind: 'runtime_routed' },
+        { sequence: 4, kind: 'runtime_accepted' },
+        { sequence: 5, kind: 'runtime_terminal' },
+        { sequence: 6, kind: 'receipt_observed' },
+        { sequence: 7, kind: 'receipt_recorded' },
+        { sequence: 8, kind: 'run_completed', status: 'succeeded' },
+      ],
     });
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({
@@ -169,6 +180,9 @@ describe('Nigma host feedback loop', () => {
     });
     await expect(replay.json()).resolves.toMatchObject({
       runtime_submission_status: 'already_accepted', receipt_id: 'accepted-receipt-1',
+      events: expect.arrayContaining([
+        expect.objectContaining({ kind: 'runtime_accepted', replayed: true }),
+      ]),
     });
     expect(invocationRequests).toBe(2);
     expect(receipts).toHaveLength(2);

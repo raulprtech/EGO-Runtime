@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isModelProviderConfigured } from './model_provider';
 
 export const RUNTIME_ID = 'ego-runtime';
-export const RUNTIME_VERSION = '0.8.0';
+export const RUNTIME_VERSION = '0.9.0';
 export const RUNTIME_PROTOCOL_VERSION = 1;
 export const RUNTIME_MANIFEST_VERSION = '1.0';
 export const RUNTIME_CAPABILITIES = [

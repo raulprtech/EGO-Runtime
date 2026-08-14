@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { z } from 'zod';
 import {
@@ -96,6 +97,32 @@ export const NigmaReceiptPayloadSchema = z.object({
 });
 export type NigmaReceiptPayload = z.infer<typeof NigmaReceiptPayloadSchema>;
 
+const HostEventKindSchema = z.enum([
+  'request_received', 'invocation_authorized', 'runtime_routed', 'runtime_accepted',
+  'runtime_terminal', 'receipt_observed', 'receipt_recorded', 'run_completed',
+]);
+
+export const NigmaHostEventSchema = z.object({
+  protocol_version: z.literal('nigma.host-event/v1'),
+  host_run_id: BoundedId,
+  plan_id: BoundedId,
+  sequence: z.number().int().min(1).max(10_000),
+  kind: HostEventKindSchema,
+  occurred_at: z.iso.datetime(),
+  invocation_id: BoundedId.optional(),
+  invocation_digest: Digest.optional(),
+  runtime_id: z.string().min(1).max(200).optional(),
+  runtime_version: z.string().min(1).max(100).optional(),
+  runtime_run_id: BoundedId.optional(),
+  receipt_id: BoundedId.optional(),
+  receipt_digest: Digest.optional(),
+  status: z.string().min(1).max(100).optional(),
+  attempt: z.number().int().min(1).max(100).default(1),
+  replayed: z.boolean().default(false),
+  evidence: z.array(z.string().min(1).max(500)).max(20).default([]),
+}).strict();
+export type NigmaHostEvent = z.infer<typeof NigmaHostEventSchema>;
+
 const AcceptedReceiptSchema = z.object({
   id: BoundedId,
   invocation_id: BoundedId,
@@ -104,6 +131,8 @@ const AcceptedReceiptSchema = z.object({
 }).passthrough();
 
 export const NigmaHostRunResultSchema = z.object({
+  protocol_version: z.literal('nigma.host-run-result/v1'),
+  host_run_id: BoundedId,
   plan_id: BoundedId,
   invocation_id: BoundedId,
   invocation_digest: Digest,
@@ -114,6 +143,7 @@ export const NigmaHostRunResultSchema = z.object({
   receipt_id: BoundedId,
   receipt_digest: Digest,
   status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out']),
+  events: z.array(NigmaHostEventSchema).min(1).max(10_000),
 }).strict();
 export type NigmaHostRunResult = z.infer<typeof NigmaHostRunResultSchema>;
 
@@ -265,6 +295,17 @@ export async function runApprovedNigmaPlan(
       'NIGMA_HOST_IDEMPOTENCY_REQUIRED', 400, 'A bounded Idempotency-Key is required',
     );
   }
+  const hostRunId = `host-${createHash('sha256')
+    .update(`${request.plan_id}:${idempotencyKey}`).digest('hex').slice(0, 32)}`;
+  const events: NigmaHostEvent[] = [];
+  const emitEvent = (kind: z.infer<typeof HostEventKindSchema>, links: Partial<NigmaHostEvent> = {}) => {
+    events.push(NigmaHostEventSchema.parse({
+      protocol_version: 'nigma.host-event/v1', host_run_id: hostRunId,
+      plan_id: request.plan_id, sequence: events.length + 1, kind,
+      occurred_at: new Date().toISOString(), attempt: 1, replayed: false, evidence: [], ...links,
+    }));
+  };
+  emitEvent('request_received');
   const control = controlPlaneConfig();
   const invocation = parseUpstream(NigmaInvocationEnvelopeSchema, await requestJson(
     `${control.baseUrl}/integration-plans/${encodeURIComponent(request.plan_id)}/runtime-invocations`,
@@ -277,7 +318,13 @@ export async function runApprovedNigmaPlan(
   if (invocation.plan_id !== request.plan_id) {
     throw new NigmaHostError('NIGMA_HOST_PLAN_MISMATCH', 409, 'Nigma returned another plan');
   }
+  const invocationLinks = { invocation_id: invocation.id, invocation_digest: invocation.digest };
+  emitEvent('invocation_authorized', invocationLinks);
   const route = runtimeRoute(invocation, await loadRoutes());
+  const runtimeLinks = {
+    ...invocationLinks, runtime_id: invocation.runtime_id, runtime_version: invocation.runtime_version,
+  };
+  emitEvent('runtime_routed', runtimeLinks);
   const submission = parseUpstream(RuntimeSubmissionResponseSchema, await requestJson(
     `${route.baseUrl}/nigma/invocations`,
     {
@@ -293,6 +340,8 @@ export async function runApprovedNigmaPlan(
       'NIGMA_RUNTIME_SUBMISSION_MISMATCH', 409, 'Runtime submission response changed sealed links',
     );
   }
+  const submissionLinks = { ...runtimeLinks, runtime_run_id: submission.runtime_run_id };
+  emitEvent('runtime_accepted', { ...submissionLinks, replayed: submission.status === 'already_accepted' });
 
   const deadline = Date.now() + Math.min(boundedTimeout(), invocation.max_duration_seconds * 1_000);
   let terminal = false;
@@ -311,6 +360,7 @@ export async function runApprovedNigmaPlan(
   if (!terminal) {
     throw new NigmaHostError('NIGMA_RUNTIME_WAIT_TIMEOUT', 504, 'Selected runtime did not finish in time');
   }
+  emitEvent('runtime_terminal', submissionLinks);
 
   const receipt = parseUpstream(NigmaReceiptPayloadSchema, await requestJson(
     `${route.baseUrl}/nigma/${encodeURIComponent(invocation.id)}/receipt`,
@@ -320,6 +370,7 @@ export async function runApprovedNigmaPlan(
   if (receipt.invocation_id !== invocation.id || receipt.invocation_digest !== invocation.digest) {
     throw new NigmaHostError('NIGMA_RUNTIME_RECEIPT_MISMATCH', 409, 'Runtime receipt changed sealed links');
   }
+  emitEvent('receipt_observed', { ...submissionLinks, status: receipt.status });
   const accepted = parseUpstream(AcceptedReceiptSchema, await requestJson(
     `${control.baseUrl}/runtime-invocations/${encodeURIComponent(invocation.id)}/receipts`,
     {
@@ -331,7 +382,14 @@ export async function runApprovedNigmaPlan(
   if (accepted.invocation_id !== invocation.id || accepted.status !== receipt.status) {
     throw new NigmaHostError('NIGMA_RECEIPT_ACCEPTANCE_MISMATCH', 409, 'Nigma accepted different links');
   }
+  const receiptLinks = {
+    ...submissionLinks, receipt_id: accepted.id, receipt_digest: accepted.digest,
+  };
+  emitEvent('receipt_recorded', receiptLinks);
+  emitEvent('run_completed', { ...receiptLinks, status: accepted.status });
   return NigmaHostRunResultSchema.parse({
+    protocol_version: 'nigma.host-run-result/v1',
+    host_run_id: hostRunId,
     plan_id: request.plan_id,
     invocation_id: invocation.id,
     invocation_digest: invocation.digest,
@@ -342,5 +400,6 @@ export async function runApprovedNigmaPlan(
     receipt_id: accepted.id,
     receipt_digest: accepted.digest,
     status: accepted.status,
+    events,
   });
 }

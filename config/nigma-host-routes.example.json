@@ -3,7 +3,7 @@
   "routes": [
     {
       "runtime_id": "ego-runtime",
-      "runtime_version": "0.8.0",
+      "runtime_version": "0.9.0",
       "base_url": "http://127.0.0.1:3000/v1/runtime",
       "credential_env": "NIGMA_RUNTIME_TOKEN_EGO"
     }
