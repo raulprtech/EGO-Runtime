@@ -131,13 +131,24 @@ describe('local runtime', () => {
       const assessment = await fetch(`${base}/local_request/assess`, {
         method: 'POST', headers,
         body: JSON.stringify({
-          assessment_id: 'attempt_1', user_id: 'local_user', session_id: 'local_session',
-          responses: [1, 2, 3].map(index => ({ question_id: `q${index}`, answer: 'Expected idea' })),
+          assessment_id: 'attempt_1', user_id: 'local_user', session_id: 'local_session', language: 'es-MX',
+          responses: [1, 2, 3].map(index => ({
+            question_id: `q${index}`, answer: 'learner-private-response',
+          })),
         }),
       });
       expect(assessment.ok).toBe(true);
-      const result = await assessment.json() as { mastery: { concepts: Array<{ confidence: number }> } };
+      const result = await assessment.json() as {
+        language: string; mastery: { concepts: Array<{ confidence: number }> };
+      };
+      expect(result.language).toBe('es-MX');
       expect(result.mastery.concepts[0].confidence).toBe(0.6);
+      const durableState = await fs.readFile(path.join(dataRoot, 'state.json'), 'utf8');
+      expect(durableState).not.toContain('learner-private-response');
+      const durableJson = JSON.parse(durableState) as {
+        attempts: Record<string, Record<string, { response_count: number }>>;
+      };
+      expect(durableJson.attempts.local_request.attempt_1.response_count).toBe(3);
 
       resetRuntimeRepositoryForTests();
       const persisted = await getRuntimeRepository().getJob('local_request');

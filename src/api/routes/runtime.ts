@@ -107,7 +107,8 @@ router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
       if (existing.request_digest !== digest) {
         return res.status(409).json({ error: 'ASSESSMENT_IDEMPOTENCY_CONFLICT' });
       }
-      return res.json({ attempt_id: input.assessment_id, assessment: existing.assessment, mastery: existing.mastery });
+      return res.json({ attempt_id: input.assessment_id, language: input.language ?? 'und',
+        assessment: existing.assessment, mastery: existing.mastery });
     }
 
     const practice = PracticeSetSchema.parse(practiceValue);
@@ -118,7 +119,9 @@ router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
       return res.status(400).json({ error: 'Duplicate or unknown question_id' });
     }
 
-    const assessment = await new AssessmentGraderAgent().grade(practice, input.responses, input.user_id);
+    const assessment = await new AssessmentGraderAgent().grade(
+      practice, input.responses, input.user_id, input.language,
+    );
     const expectedConcept = new Map(practice.quiz.map(question => [question.id, question.concept_id]));
     if (assessment.results.length !== responseIds.size || assessment.results.some(result =>
       !responseIds.has(result.question_id) || expectedConcept.get(result.question_id) !== result.concept_id)) {
@@ -126,7 +129,7 @@ router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
     }
 
     const applied = await repository.applyAssessment(
-      req.params.request_id, input.assessment_id, digest, assessment, input.responses,
+      req.params.request_id, input.assessment_id, digest, assessment, input.responses.length,
       current => updateMasteryState(MasteryStateSchema.parse(current), assessment),
     );
     if (applied.conflict) return res.status(409).json({ error: 'ASSESSMENT_IDEMPOTENCY_CONFLICT' });
@@ -135,6 +138,7 @@ router.post('/:request_id/assess', authMiddleware, async (req, res, next) => {
         .emit('assessment_completed', { attempt_id: input.assessment_id });
     }
     res.json({ attempt_id: input.assessment_id,
+      language: input.language ?? 'und',
       assessment: applied.attempt?.assessment, mastery: applied.attempt?.mastery });
   } catch (error) { next(error); }
 });

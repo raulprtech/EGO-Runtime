@@ -112,6 +112,8 @@ function tokens(value: string): Set<string> {
 }
 
 function assessment(prompt: string) {
+  const requestedLanguage = section(prompt, 'Requested language:', '\nPractice set:').trim();
+  const spanish = requestedLanguage.toLowerCase().startsWith('es');
   const practice = JSON.parse(section(prompt, 'Practice set:', '\nLearner responses:')) as {
     quiz: Array<{ id: string; concept_id: string; answer_key: string }>;
   };
@@ -129,15 +131,21 @@ function assessment(prompt: string) {
       question_id: response.question_id,
       concept_id: question.concept_id,
       score,
-      feedback: score >= 0.8 ? 'The response includes the expected concept.' : 'Review the source and add the central concept.',
+      feedback: spanish
+        ? score >= 0.8 ? 'La respuesta incluye el concepto esperado.' : 'Revisa la fuente y añade el concepto central.'
+        : score >= 0.8 ? 'The response includes the expected concept.' : 'Review the source and add the central concept.',
       missing_elements: score >= 0.8 ? [] : [...expected].filter(token => !actual.has(token)),
     };
   });
   return {
     results,
-    summary: results.every(item => item.score >= 0.8)
-      ? 'All submitted concepts were retrieved.'
-      : 'Some concepts need another source-grounded review.',
+    summary: spanish
+      ? results.every(item => item.score >= 0.8)
+        ? 'Se recuperaron todos los conceptos enviados.'
+        : 'Algunos conceptos necesitan otro repaso basado en la fuente.'
+      : results.every(item => item.score >= 0.8)
+        ? 'All submitted concepts were retrieved.'
+        : 'Some concepts need another source-grounded review.',
   };
 }
 

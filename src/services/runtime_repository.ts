@@ -17,7 +17,7 @@ export interface AttemptRecord {
   request_digest: string;
   assessment: AssessmentResult;
   mastery: MasteryState;
-  responses: Array<{ question_id: string; answer: string }>;
+  response_count: number;
   created_at: string;
 }
 
@@ -40,7 +40,7 @@ export interface RuntimeRepository {
   getMastery(requestId: string): Promise<MasteryState | null>;
   getAttempt(requestId: string, attemptId: string): Promise<AttemptRecord | null>;
   applyAssessment(requestId: string, attemptId: string, digest: string, assessment: AssessmentResult,
-    responses: AttemptRecord['responses'], update: (current: MasteryState) => MasteryState):
+    responseCount: number, update: (current: MasteryState) => MasteryState):
     Promise<{ conflict: boolean; created: boolean; attempt?: AttemptRecord }>;
 }
 
@@ -233,7 +233,7 @@ class LocalRuntimeRepository implements RuntimeRepository {
   }
 
   applyAssessment(requestId: string, attemptId: string, digest: string, assessment: AssessmentResult,
-    responses: AttemptRecord['responses'], update: (current: MasteryState) => MasteryState) {
+    responseCount: number, update: (current: MasteryState) => MasteryState) {
     return this.mutate(() => {
       const attempts = this.state.attempts[requestId] ??= {};
       const existing = attempts[attemptId];
@@ -243,7 +243,8 @@ class LocalRuntimeRepository implements RuntimeRepository {
       const current = this.state.mastery[requestId];
       if (!current) throw new Error('Mastery state not found');
       const mastery = update(current);
-      const attempt: AttemptRecord = { request_digest: digest, assessment, mastery, responses,
+      const attempt: AttemptRecord = { request_digest: digest, assessment, mastery,
+        response_count: responseCount,
         created_at: new Date().toISOString() };
       attempts[attemptId] = attempt;
       this.state.mastery[requestId] = mastery;
@@ -394,7 +395,7 @@ class FirestoreRuntimeRepository implements RuntimeRepository {
     return snapshot.exists ? snapshot.data() as AttemptRecord : null;
   }
   async applyAssessment(requestId: string, attemptId: string, digest: string, assessment: AssessmentResult,
-    responses: AttemptRecord['responses'], update: (current: MasteryState) => MasteryState) {
+    responseCount: number, update: (current: MasteryState) => MasteryState) {
     const attemptRef = this.job(requestId).collection('attempts').doc(attemptId);
     const masteryRef = this.job(requestId).collection('state').doc('mastery');
     return this.db.runTransaction(async transaction => {
@@ -408,7 +409,8 @@ class FirestoreRuntimeRepository implements RuntimeRepository {
           : { conflict: true, created: false };
       }
       const mastery = update(masterySnapshot.data() as MasteryState);
-      const attempt: AttemptRecord = { request_digest: digest, assessment, mastery, responses,
+      const attempt: AttemptRecord = { request_digest: digest, assessment, mastery,
+        response_count: responseCount,
         created_at: new Date().toISOString() };
       transaction.create(attemptRef, attempt);
       transaction.set(masteryRef, mastery);

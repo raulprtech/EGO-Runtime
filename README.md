@@ -40,6 +40,8 @@ npm run demo
 
 Local state and generated artifacts are written under `.ego-runtime/`. Inputs must be inside `LOCAL_INPUT_ROOT`; symlinks and paths that escape that root are rejected.
 
+Assessment requests may declare a BCP47 language. The runtime returns the declared language, bounded per-question scores and updated mastery. Raw learner responses are used transiently for grading but are not retained in local or Firestore attempt records; durable state contains only response count, digest, scores and mastery.
+
 ## Provider extension
 
 `ModelProvider` is the stable structured-generation boundary. `TranscriptionProvider` independently defines speech-to-text. The bundled adapters include Gemini+ADK and a credential-free deterministic demo provider; future providers can be registered without changing agents, learning-domain services or the HTTP audio contract.
@@ -52,7 +54,7 @@ EGO rejects arbitrary remote URLs, confines local inputs to a configured root, r
 
 ## Status
 
-Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. Exact replay is visible without exposing routes or credentials. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. Durable asynchronous host traces, the real Hermes bridge, scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. Exact replay is visible without exposing routes or credentials. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. F5.2 assessment integration declares the requested language and removes raw learner responses from durable attempts; see [the F5.2 result](docs/f5.2-learning-assessment-result-2026-08-14.md). Durable asynchronous host traces, scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 ## License
 

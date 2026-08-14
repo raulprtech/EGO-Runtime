@@ -38,6 +38,7 @@ export const AssessmentRequestSchema = z.object({
   assessment_id: z.string().regex(/^[A-Za-z0-9_-]+$/).max(128),
   user_id: z.string().min(1).max(128),
   session_id: z.string().min(1).max(128),
+  language: z.string().regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/).optional(),
   responses: z.array(z.object({
     question_id: z.string().min(1).max(128),
     answer: z.string().min(1).max(10_000),

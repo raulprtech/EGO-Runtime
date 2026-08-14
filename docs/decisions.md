@@ -17,3 +17,5 @@
 
 15. **Host-owned runtime routing.** Nigma selects an exact runtime identity/version; the host operator owns endpoints and credentials. The control-plane envelope cannot redirect transport.
 16. **Bounded synchronous reference loop.** EGO 0.8 proves invocation-to-experience feedback synchronously for local integration. Durable long-running orchestration requires a later asynchronous host-run contract.
+17. **Transient learner answers.** Assessment answers are passed to the grading provider but are not durable attempt state. Local and Firestore records retain only a response count and digest plus bounded scores/mastery, while answer keys remain private runtime state.
+18. **Explicit response language.** Assessment requests may carry one BCP47 language through the provider boundary, and responses declare that language so hosts can audit consistency without interpreting prose.

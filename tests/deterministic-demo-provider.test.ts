@@ -37,7 +37,10 @@ describe('deterministic demo provider', () => {
         answer: `My explanation includes ${question.answer_key}.`,
       })),
       'learner_1',
+      'es-MX',
     );
     expect(assessment.results.every(result => result.score === 1)).toBe(true);
+    expect(assessment.summary).toBe('Se recuperaron todos los conceptos enviados.');
+    expect(assessment.results.every(result => result.feedback.startsWith('La respuesta'))).toBe(true);
   });
 });
