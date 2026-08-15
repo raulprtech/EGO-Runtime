@@ -20,7 +20,7 @@ async function listen(app: express.Express) {
 
 const digest = (value: string) => value.repeat(64).slice(0, 64);
 
-function task() {
+function task(locale: 'es-MX' | 'en-US' = 'es-MX') {
   return {
     objective: 'Crear un plan de estudio acotado con mis notas locales',
     materials: [{
@@ -32,6 +32,7 @@ function task() {
     }],
     project: 'education-local',
     max_duration_seconds: 600,
+    presentation_locale: locale,
     required_runtime_capabilities: ['educational_execution'],
   };
 }
@@ -50,15 +51,21 @@ function runtimeExplanation() {
     runner_up: {
       runtime_id: 'hermes-runtime', runtime_version: '0.20.0',
       snapshot_id: 'hermes-runtime@0.20.0', snapshot_digest: digest('7'),
-      total_score_ppm: 180_000, evidence_basis: 'declared_only' as const,
+      total_score_ppm: 190_000, evidence_basis: 'declared_only' as const,
     },
     eligible_candidate_count: 2,
     excluded_candidate_count: 0,
-    score_margin_ppm: 20_000,
-    factors: [{
-      dimension: 'reliability', selected_weighted_score_ppm: 200_000,
-      runner_up_weighted_score_ppm: 180_000, delta_ppm: 20_000,
-    }],
+    score_margin_ppm: 10_000,
+    factors: [
+      {
+        dimension: 'reliability', selected_weighted_score_ppm: 200_000,
+        runner_up_weighted_score_ppm: 180_000, delta_ppm: 20_000,
+      },
+      {
+        dimension: 'cost', selected_weighted_score_ppm: 0,
+        runner_up_weighted_score_ppm: 10_000, delta_ppm: -10_000,
+      },
+    ],
     reason_codes: [
       'highest_eligible_score', 'all_hard_constraints_satisfied',
       'human_approval_required',
@@ -172,7 +179,8 @@ describe('Nigma educational host preparation', () => {
     control.post('/educational-tasks/prepare', (req, res) => {
       expect(req.header('x-api-key')).toBe('control-test-key');
       expect(req.header('idempotency-key')).toBe('prepare-study-1');
-      expect(req.body).toEqual(task());
+      const { presentation_locale: _locale, ...neutralTask } = task();
+      expect(req.body).toEqual(neutralTask);
       preparations += 1;
       res.json(nigmaPreparation());
     });
@@ -194,11 +202,20 @@ describe('Nigma educational host preparation', () => {
         selection_id: 'runtime-selection-1',
         selection_digest: digest('8'),
         selected_score_ppm: 200_000,
-        runner_up: { runtime_id: 'hermes-runtime', total_score_ppm: 180_000 },
-        score_margin_ppm: 20_000,
+        runner_up: { runtime_id: 'hermes-runtime', total_score_ppm: 190_000 },
+        score_margin_ppm: 10_000,
         authority: 'human_approval_required',
         approval_granted: false,
         execution_performed: false,
+        presentation: {
+          locale: 'es-MX',
+          title: 'ego-runtime@0.9.0 fue seleccionado',
+          advantages: [{ dimension: 'reliability', delta_ppm: 20_000 }],
+          tradeoffs: [{ dimension: 'cost', delta_ppm: -10_000 }],
+          authority: 'informational_only',
+          approval_granted: false,
+          execution_performed: false,
+        },
       },
       approval_target: {
         scope: 'execute',
@@ -214,6 +231,60 @@ describe('Nigma educational host preparation', () => {
       execution_performed: false,
     });
     expect(preparations).toBe(1);
+    const presentation = result.runtime_decision.presentation;
+    const { id: presentationId, digest: presentationDigest, ...presentationPayload } = presentation;
+    expect(presentationDigest).toBe(sha256(canonicalJson(presentationPayload)));
+    expect(presentationId).toBe(
+      `host-runtime-decision-presentation-${presentationDigest.slice(0, 16)}`,
+    );
+  });
+
+  it('renders a separate deterministic English presentation', async () => {
+    const control = express();
+    control.use(express.json());
+    control.post('/educational-tasks/prepare', (req, res) => {
+      const { presentation_locale: _locale, ...neutralTask } = task('en-US');
+      expect(req.body).toEqual(neutralTask);
+      res.json(nigmaPreparation());
+    });
+    const runtime = await runtimeFor(control);
+    const localizedHeaders = { ...headers, 'Idempotency-Key': 'localized-view' };
+    const spanishResponse = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers: localizedHeaders, body: JSON.stringify(task('es-MX')) },
+    );
+    const response = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers: localizedHeaders,
+        body: JSON.stringify(task('en-US')) },
+    );
+    const spanish = await spanishResponse.json();
+    const result = await response.json();
+    expect(spanishResponse.status, JSON.stringify(spanish)).toBe(200);
+    expect(response.status, JSON.stringify(result)).toBe(200);
+    expect(result.runtime_decision.presentation).toMatchObject({
+      locale: 'en-US',
+      title: 'ego-runtime@0.9.0 was selected',
+      advantages: [{ dimension: 'reliability', text: expect.stringContaining('points') }],
+      tradeoffs: [{ dimension: 'cost', text: expect.stringContaining('points') }],
+      authority: 'informational_only',
+      approval_granted: false,
+      execution_performed: false,
+    });
+    expect(result.runtime_decision.presentation.digest).not.toBe(
+      runtimeExplanation().digest,
+    );
+    expect(result.plan).toEqual(spanish.plan);
+    expect(result.runtime_decision.selection_digest).toBe(
+      spanish.runtime_decision.selection_digest,
+    );
+    expect(result.runtime_decision.presentation.source_explanation_digest).toBe(
+      spanish.runtime_decision.presentation.source_explanation_digest,
+    );
+    expect(result.host_preparation_id).not.toBe(spanish.host_preparation_id);
+    expect(result.runtime_decision.presentation.id).not.toBe(
+      spanish.runtime_decision.presentation.id,
+    );
   });
 
   it('accepts a historical preparation without the optional explanation', async () => {
@@ -259,6 +330,13 @@ describe('Nigma educational host preparation', () => {
     await expect(noKey.json()).resolves.toMatchObject({
       error: 'NIGMA_HOST_IDEMPOTENCY_REQUIRED',
     });
+    expect(contacted).toBe(0);
+
+    const unsupported = await fetch(url, {
+      method: 'POST', headers,
+      body: JSON.stringify({ ...task(), presentation_locale: 'fr-FR' }),
+    });
+    expect(unsupported.status).toBe(400);
     expect(contacted).toBe(0);
   });
 

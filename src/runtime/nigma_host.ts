@@ -10,6 +10,8 @@ import { canonicalJson, sha256 } from './integrity';
 
 const BoundedId = z.string().min(1).max(300);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
+export const NigmaPresentationLocaleSchema = z.enum(['es-MX', 'en-US']);
+type PresentationLocale = z.infer<typeof NigmaPresentationLocaleSchema>;
 
 const LearnerContextSchema = z.object({
   user_id: z.string().min(1).max(128),
@@ -51,6 +53,7 @@ export const NigmaEducationalPreparationRequestSchema = z.object({
   materials: z.array(EducationalMaterialReferenceSchema).min(1).max(20),
   project: z.string().min(1).max(200).default('education'),
   max_duration_seconds: z.number().int().min(30).max(86_400).default(600),
+  presentation_locale: NigmaPresentationLocaleSchema.default('es-MX'),
   required_runtime_capabilities: z.array(z.enum([
     'educational_execution', 'assessment', 'mastery_tracking',
   ])).min(1).max(3).default(['educational_execution']),
@@ -327,6 +330,34 @@ const RuntimeDecisionExplanationSchema = z.object({
 
 type RuntimeDecisionExplanation = z.infer<typeof RuntimeDecisionExplanationSchema>;
 
+const RuntimeDecisionPresentationItemSchema = z.object({
+  dimension: z.string().min(1).max(100),
+  label: z.string().min(1).max(100),
+  delta_ppm: z.number().int().min(-1_000_000).max(1_000_000),
+  text: z.string().min(1).max(500),
+}).strict();
+
+const RuntimeDecisionPresentationCoreSchema = z.object({
+  protocol_version: z.literal('nigma.host-runtime-decision-presentation/v1'),
+  source_explanation_id: z.string().regex(/^runtime-decision-explanation-[a-f0-9]{16}$/),
+  source_explanation_digest: Digest,
+  locale: NigmaPresentationLocaleSchema,
+  title: z.string().min(1).max(300),
+  summary: z.string().min(1).max(1000),
+  advantages: z.array(RuntimeDecisionPresentationItemSchema).max(3),
+  tradeoffs: z.array(RuntimeDecisionPresentationItemSchema).max(3),
+  reason_texts: z.array(z.string().min(1).max(500)).min(3).max(4),
+  disclaimer: z.string().min(1).max(500),
+  authority: z.literal('informational_only'),
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+}).strict();
+
+const RuntimeDecisionPresentationSchema = RuntimeDecisionPresentationCoreSchema.extend({
+  id: z.string().regex(/^host-runtime-decision-presentation-[a-f0-9]{16}$/),
+  digest: Digest,
+}).strict();
+
 const NigmaEducationalPreparationUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-task-preparation/v1'),
   status: z.literal('awaiting_human_approval'),
@@ -420,6 +451,7 @@ export const NigmaHostPreparationResultSchema = z.object({
     authority: z.literal('human_approval_required'),
     approval_granted: z.literal(false),
     execution_performed: z.literal(false),
+    presentation: RuntimeDecisionPresentationSchema,
   }).strict().optional(),
   approval_target: PreparationApprovalTargetSchema,
   resume: z.object({
@@ -433,9 +465,105 @@ export const NigmaHostPreparationResultSchema = z.object({
 }).strict();
 export type NigmaHostPreparationResult = z.infer<typeof NigmaHostPreparationResultSchema>;
 
+const FACTOR_LABELS: Record<string, Record<PresentationLocale, string>> = {
+  capability_coverage: { 'es-MX': 'cobertura de capacidades', 'en-US': 'capability coverage' },
+  reliability: { 'es-MX': 'confiabilidad', 'en-US': 'reliability' },
+  latency: { 'es-MX': 'latencia', 'en-US': 'latency' },
+  cost: { 'es-MX': 'costo', 'en-US': 'cost' },
+  specialization: { 'es-MX': 'especialización', 'en-US': 'specialization' },
+  data_locality: { 'es-MX': 'localidad de datos', 'en-US': 'data locality' },
+};
+
+const REASON_TEXTS: Record<string, Record<PresentationLocale, string>> = {
+  highest_eligible_score: {
+    'es-MX': 'Obtuvo la puntuación más alta entre los runtimes elegibles.',
+    'en-US': 'It received the highest score among eligible runtimes.',
+  },
+  reviewed_operational_evidence_applied: {
+    'es-MX': 'La comparación incorporó evidencia operacional revisada.',
+    'en-US': 'The comparison incorporated reviewed operational evidence.',
+  },
+  all_hard_constraints_satisfied: {
+    'es-MX': 'Cumplió todas las restricciones obligatorias de la tarea.',
+    'en-US': 'It satisfied every mandatory task constraint.',
+  },
+  human_approval_required: {
+    'es-MX': 'Se requiere aprobación humana antes de ejecutar.',
+    'en-US': 'Human approval is required before execution.',
+  },
+};
+
+function localizedNumber(value: number, locale: PresentationLocale): string {
+  const fixed = value.toFixed(2);
+  return locale === 'es-MX' ? fixed.replace('.', ',') : fixed;
+}
+
+function buildRuntimeDecisionPresentation(
+  explanation: RuntimeDecisionExplanation,
+  locale: PresentationLocale,
+): z.infer<typeof RuntimeDecisionPresentationSchema> {
+  const selected = explanation.selected;
+  const runner = explanation.runner_up;
+  const selectedPercent = localizedNumber(selected.total_score_ppm / 10_000, locale);
+  const marginPoints = localizedNumber(explanation.score_margin_ppm / 10_000, locale);
+  const title = locale === 'es-MX'
+    ? `${selected.runtime_id}@${selected.runtime_version} fue seleccionado`
+    : `${selected.runtime_id}@${selected.runtime_version} was selected`;
+  const summary = runner
+    ? (locale === 'es-MX'
+      ? `Obtuvo ${selectedPercent}% frente a ${localizedNumber(runner.total_score_ppm / 10_000, locale)}% de ${runner.runtime_id}; margen de ${marginPoints} puntos.`
+      : `It scored ${selectedPercent}% versus ${localizedNumber(runner.total_score_ppm / 10_000, locale)}% for ${runner.runtime_id}; a ${marginPoints}-point margin.`)
+    : (locale === 'es-MX'
+      ? `Obtuvo ${selectedPercent}% y fue el único runtime elegible.`
+      : `It scored ${selectedPercent}% and was the only eligible runtime.`);
+  const item = (factor: RuntimeDecisionExplanation['factors'][number]) => {
+    const label = FACTOR_LABELS[factor.dimension]?.[locale]
+      ?? factor.dimension.replaceAll('_', ' ');
+    const points = localizedNumber(Math.abs(factor.delta_ppm) / 10_000, locale);
+    return {
+      dimension: factor.dimension,
+      label,
+      delta_ppm: factor.delta_ppm,
+      text: locale === 'es-MX'
+        ? `${label}: ${factor.delta_ppm > 0 ? '+' : '-'}${points} puntos frente a la alternativa.`
+        : `${label}: ${factor.delta_ppm > 0 ? '+' : '-'}${points} points versus the alternative.`,
+    };
+  };
+  const advantages = explanation.factors.filter(value => value.delta_ppm > 0)
+    .sort((left, right) => right.delta_ppm - left.delta_ppm
+      || left.dimension.localeCompare(right.dimension)).slice(0, 3).map(item);
+  const tradeoffs = explanation.factors.filter(value => value.delta_ppm < 0)
+    .sort((left, right) => left.delta_ppm - right.delta_ppm
+      || left.dimension.localeCompare(right.dimension)).slice(0, 3).map(item);
+  const provisional = RuntimeDecisionPresentationCoreSchema.parse({
+    protocol_version: 'nigma.host-runtime-decision-presentation/v1',
+    source_explanation_id: explanation.id,
+    source_explanation_digest: explanation.digest,
+    locale,
+    title,
+    summary,
+    advantages,
+    tradeoffs,
+    reason_texts: explanation.reason_codes.map(reason => REASON_TEXTS[reason][locale]),
+    disclaimer: locale === 'es-MX'
+      ? 'Esta explicación es informativa; no aprueba ni ejecuta la tarea.'
+      : 'This explanation is informational; it does not approve or execute the task.',
+    authority: 'informational_only',
+    approval_granted: false,
+    execution_performed: false,
+  });
+  const presentationDigest = sha256(canonicalJson(provisional));
+  return RuntimeDecisionPresentationSchema.parse({
+    ...provisional,
+    id: `host-runtime-decision-presentation-${presentationDigest.slice(0, 16)}`,
+    digest: presentationDigest,
+  });
+}
+
 function projectRuntimeDecision(
   explanation: RuntimeDecisionExplanation | undefined,
   runtime: z.infer<typeof NigmaEducationalPreparationUpstreamSchema>['integration_plan']['runtime_selection'],
+  locale: PresentationLocale,
 ): NigmaHostPreparationResult['runtime_decision'] {
   if (!explanation) return undefined;
   const { id: _id, digest: _digest, ...payload } = explanation;
@@ -473,6 +601,7 @@ function projectRuntimeDecision(
     authority: explanation.authority,
     approval_granted: false,
     execution_performed: false,
+    presentation: buildRuntimeDecisionPresentation(explanation, locale),
   };
 }
 
@@ -767,6 +896,7 @@ export async function prepareNigmaEducationalTask(
       'NIGMA_HOST_IDEMPOTENCY_REQUIRED', 400, 'A bounded Idempotency-Key is required',
     );
   }
+  const { presentation_locale: presentationLocale, ...nigmaRequest } = request;
   const control = controlPlaneConfig();
   const prepared = parseUpstream(NigmaEducationalPreparationUpstreamSchema, await requestJson(
     `${control.baseUrl}/educational-tasks/prepare`,
@@ -777,7 +907,7 @@ export async function prepareNigmaEducationalTask(
         'Idempotency-Key': idempotencyKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify(nigmaRequest),
     },
     'Nigma educational preparation endpoint',
   ));
@@ -785,7 +915,7 @@ export async function prepareNigmaEducationalTask(
   const runtime = plan.runtime_selection;
   const route = prepared.agent_route;
   const approval = prepared.approval_target;
-  const linksAgree = prepared.capability_request.objective === request.objective
+  const linksAgree = prepared.capability_request.objective === nigmaRequest.objective
     && plan.request_id === prepared.capability_request.id
     && approval.plan_id === plan.id
     && approval.plan_digest === plan.digest
@@ -814,13 +944,13 @@ export async function prepareNigmaEducationalTask(
     );
   }
   const hostPreparationId = `host-preparation-${createHash('sha256')
-    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}`)
+    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}:${presentationLocale}`)
     .digest('hex').slice(0, 32)}`;
   return NigmaHostPreparationResultSchema.parse({
     protocol_version: 'nigma.host-preparation/v1',
     host_preparation_id: hostPreparationId,
     status: 'awaiting_human_approval',
-    objective: request.objective,
+    objective: nigmaRequest.objective,
     plan: {
       id: plan.id,
       digest: plan.digest,
@@ -833,7 +963,9 @@ export async function prepareNigmaEducationalTask(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
-    runtime_decision: projectRuntimeDecision(prepared.runtime_explanation, runtime),
+    runtime_decision: projectRuntimeDecision(
+      prepared.runtime_explanation, runtime, presentationLocale,
+    ),
     approval_target: approval,
     resume: {
       method: 'POST',
@@ -899,6 +1031,7 @@ function fallbackFailure(record: NigmaHostRunRecord): {
 
 function projectFallbackPreparation(
   prepared: z.infer<typeof NigmaEducationalPreparationUpstreamSchema>,
+  locale: PresentationLocale,
 ): NigmaHostPreparationResult {
   const plan = prepared.integration_plan;
   const runtime = plan.runtime_selection;
@@ -932,7 +1065,7 @@ function projectFallbackPreparation(
     );
   }
   const hostPreparationId = `host-preparation-${createHash('sha256')
-    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}`)
+    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}:${locale}`)
     .digest('hex').slice(0, 32)}`;
   return NigmaHostPreparationResultSchema.parse({
     protocol_version: 'nigma.host-preparation/v1',
@@ -948,7 +1081,11 @@ function projectFallbackPreparation(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
-    runtime_decision: projectRuntimeDecision(prepared.runtime_explanation, runtime),
+    runtime_decision: projectRuntimeDecision(
+      prepared.runtime_explanation,
+      runtime,
+      locale,
+    ),
     approval_target: approval,
     resume: { method: 'POST', path: '/v1/runtime/nigma/host-runs', plan_id: plan.id },
     approval_granted: false,
@@ -962,7 +1099,7 @@ function projectFallbackPreparation(
 }
 
 export async function prepareNigmaHostFallback(
-  hostRunId: string, idempotencyKey: string,
+  hostRunId: string, idempotencyKey: string, locale: PresentationLocale = 'es-MX',
 ): Promise<NigmaHostFallbackPreparation> {
   if (!idempotencyKey || idempotencyKey.length > 200) {
     throw new NigmaHostError(
@@ -1000,7 +1137,7 @@ export async function prepareNigmaHostFallback(
       'Nigma fallback changed source failure or integrity evidence',
     );
   }
-  const replacement = projectFallbackPreparation(fallback.preparation);
+  const replacement = projectFallbackPreparation(fallback.preparation, locale);
   if (replacement.runtime.id === fallback.failed_runtime_id) {
     throw new NigmaHostError(
       'NIGMA_HOST_FALLBACK_LINK_MISMATCH', 502,

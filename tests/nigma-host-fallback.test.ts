@@ -236,6 +236,21 @@ describe('Nigma host runtime fallback', () => {
     );
     expect(bodyRejected.status).toBe(400);
     expect(fallbackCalls).toBe(1);
+
+    const localeRejected = await fetch(
+      `${host.baseUrl}/v1/runtime/nigma/host-runs/${hostRunId}/fallbacks`,
+      {
+        method: 'POST',
+        headers: {
+          ...auth,
+          'Idempotency-Key': 'fallback-key-3',
+          'X-Presentation-Locale': 'fr-FR',
+        },
+        body: '{}',
+      },
+    );
+    expect(localeRejected.status).toBe(400);
+    expect(fallbackCalls).toBe(1);
   });
 
   it('refuses fallback once a runtime accepted the invocation', async () => {

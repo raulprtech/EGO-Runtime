@@ -12,6 +12,7 @@ import {
 } from '../../runtime/nigma_handoff';
 import {
   NigmaEducationalPreparationRequestSchema,
+  NigmaPresentationLocaleSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
   getNigmaHostRunEvents,
@@ -92,7 +93,9 @@ router.post('/host-runs/:host_run_id/fallbacks', authMiddleware, async (req, res
       );
     }
     return res.json(await prepareNigmaHostFallback(
-      req.params.host_run_id, req.header('Idempotency-Key') ?? '',
+      req.params.host_run_id,
+      req.header('Idempotency-Key') ?? '',
+      NigmaPresentationLocaleSchema.parse(req.header('X-Presentation-Locale') ?? 'es-MX'),
     ));
   } catch (error) {
     if (error instanceof NigmaHostError) {

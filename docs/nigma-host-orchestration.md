@@ -14,7 +14,8 @@ Content-Type: application/json
 
 {
   "objective": "Create a bounded study plan",
-  "materials": [{ "uri": "file:///controlled/course/notes.md" }]
+  "materials": [{ "uri": "file:///controlled/course/notes.md" }],
+  "presentation_locale": "en-US"
 }
 ```
 
@@ -27,6 +28,17 @@ snapshot links before projecting it. Historical preparations without the field
 remain valid; an altered present explanation fails with 502. The projection is
 always marked `human_approval_required`, `approval_granted=false` and
 `execution_performed=false`.
+
+G1.6 adds `runtime_decision.presentation`, a deterministic host-owned rendering
+of the verified object. Supported locales are `es-MX` (default) and `en-US`.
+EGO removes `presentation_locale` before forwarding the request to Nigma. The
+presentation has a separate digest/ID, links the exact source explanation and
+is always `informational_only`; changing locale changes only the host view and
+host preparation ID, not the Nigma plan, selection or approval target.
+
+Fallback preparation keeps its body empty. A caller may set
+`X-Presentation-Locale: en-US`; omitting the header uses `es-MX`. Unsupported
+locales fail validation before Nigma is contacted.
 
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
