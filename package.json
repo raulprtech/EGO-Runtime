@@ -14,7 +14,8 @@
     "demo": "node scripts/demo.js",
     "smoke:model": "node --import tsx scripts/model-smoke.ts",
     "smoke:transcription": "node --import tsx scripts/transcription-smoke.ts",
-    "smoke:speech": "node --import tsx scripts/speech-smoke.ts"
+    "smoke:speech": "node --import tsx scripts/speech-smoke.ts",
+    "nigma:hermes-decision": "node --import tsx scripts/hermes-decision-adapter.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",

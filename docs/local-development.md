@@ -18,6 +18,12 @@ separate from `INTERNAL_RUNTIME_TOKEN`, and expose it only to the trusted
 conversation/UI adapter that captures an explicit owner decision. Never place
 it in model context or a mobile bundle.
 
+The optional Hermes conversation sidecar additionally reads
+`HERMES_CHAT_URL`, `HERMES_CHAT_API_KEY`, `EGO_RUNTIME_URL` and
+`EGO_RUNTIME_TOKEN`. These are process-owned transport settings; they must not
+be sent to a model, stored in ARIA or written into its sealed binding. See the
+[sidecar guide](hermes-decision-sidecar.md).
+
 Execution approval is disabled locally unless `REQUIRE_EXECUTION_APPROVAL=true`. When enabled, configure `EXECUTION_APPROVAL_SECRET`. Configure the independent `RESULT_RECEIPT_SECRET` to issue terminal signed receipts. Generate both as distinct high-entropy secrets and keep them out of client applications.
 
 ## Start

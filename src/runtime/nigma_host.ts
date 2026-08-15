@@ -405,7 +405,7 @@ const PreparationInterfaceProjectionCoreSchema = z.object({
   execution_performed: z.literal(false),
 }).strict();
 
-const PreparationInterfaceProjectionSchema = PreparationInterfaceProjectionCoreSchema.extend({
+export const PreparationInterfaceProjectionSchema = PreparationInterfaceProjectionCoreSchema.extend({
   id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
   digest: Digest,
 }).strict();
