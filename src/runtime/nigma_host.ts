@@ -323,6 +323,57 @@ export const NigmaHostPreparationResultSchema = z.object({
 }).strict();
 export type NigmaHostPreparationResult = z.infer<typeof NigmaHostPreparationResultSchema>;
 
+const NigmaRuntimeFallbackUpstreamSchema = z.object({
+  protocol_version: z.literal('nigma.educational-runtime-fallback/v1'),
+  id: BoundedId,
+  source_invocation_id: BoundedId,
+  source_invocation_digest: Digest,
+  source_execution_id: BoundedId,
+  source_plan_id: BoundedId,
+  source_plan_digest: Digest,
+  failed_runtime_id: z.string().min(1).max(200),
+  failed_runtime_version: z.string().min(1).max(100),
+  failed_runtime_snapshot_id: BoundedId,
+  failed_runtime_snapshot_digest: Digest,
+  failure_code: z.enum([
+    'runtime_unreachable', 'runtime_unavailable', 'runtime_rejected',
+  ]),
+  observed_at: z.iso.datetime(),
+  evidence_digest: Digest,
+  excluded_runtime_ids: z.array(z.string().min(1).max(200)).min(1).max(20),
+  preparation: NigmaEducationalPreparationUpstreamSchema,
+  status: z.literal('awaiting_human_approval'),
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+  digest: Digest,
+  created_at: z.iso.datetime(),
+}).strict();
+
+export const NigmaHostFallbackPreparationSchema = z.object({
+  protocol_version: z.literal('nigma.host-fallback-preparation/v1'),
+  host_run_id: z.string().regex(/^host-[a-f0-9]{32}$/),
+  fallback_id: BoundedId,
+  fallback_digest: Digest,
+  status: z.literal('awaiting_human_approval'),
+  failure: z.object({
+    code: z.enum(['runtime_unreachable', 'runtime_unavailable', 'runtime_rejected']),
+    evidence_digest: Digest,
+  }).strict(),
+  failed_runtime: z.object({
+    id: z.string().min(1).max(200),
+    version: z.string().min(1).max(100),
+    snapshot_id: BoundedId,
+    snapshot_digest: Digest,
+  }).strict(),
+  replacement: NigmaHostPreparationResultSchema,
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+  evidence: z.array(z.string().min(1).max(500)).min(1).max(20),
+}).strict();
+export type NigmaHostFallbackPreparation = z.infer<
+  typeof NigmaHostFallbackPreparationSchema
+>;
+
 export class NigmaHostError extends Error {
   constructor(readonly code: string, readonly status: number, message: string) {
     super(message);
@@ -646,6 +697,186 @@ export async function prepareNigmaEducationalTask(
     ],
   });
 }
+
+function fallbackFailure(record: NigmaHostRunRecord): {
+  code: 'runtime_unreachable' | 'runtime_unavailable' | 'runtime_rejected';
+  invocationId: string;
+  invocationDigest: string;
+} {
+  if (record.status !== 'error' || !record.error) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_FALLBACK_NOT_ALLOWED', 409,
+      'Fallback requires a persisted pre-acceptance runtime failure',
+    );
+  }
+  const accepted = record.events.some(event => event.kind === 'runtime_accepted');
+  const invocationEvent = [...record.events].reverse().find(
+    event => event.invocation_id && event.invocation_digest,
+  );
+  const last = record.events.at(-1);
+  if (accepted || !invocationEvent?.invocation_id || !invocationEvent.invocation_digest || !last) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_FALLBACK_NOT_ALLOWED', 409,
+      'Fallback cannot replace an accepted or unidentified runtime attempt',
+    );
+  }
+  let code: 'runtime_unreachable' | 'runtime_unavailable' | 'runtime_rejected';
+  if (['NIGMA_SELECTED_RUNTIME_UNROUTABLE', 'NIGMA_RUNTIME_CREDENTIAL_UNAVAILABLE']
+    .includes(record.error.code) && last.kind === 'invocation_authorized') {
+    code = 'runtime_unavailable';
+  } else if (record.error.code === 'NIGMA_HOST_TRANSPORT_FAILED'
+      && last.kind === 'runtime_routed') {
+    code = 'runtime_unreachable';
+  } else if (record.error.code === 'NIGMA_HOST_UPSTREAM_REJECTED'
+      && last.kind === 'runtime_routed') {
+    code = 'runtime_rejected';
+  } else {
+    throw new NigmaHostError(
+      'NIGMA_HOST_FALLBACK_NOT_ALLOWED', 409,
+      'Persisted failure is not eligible for safe pre-acceptance fallback',
+    );
+  }
+  return {
+    code,
+    invocationId: invocationEvent.invocation_id,
+    invocationDigest: invocationEvent.invocation_digest,
+  };
+}
+
+function projectFallbackPreparation(
+  prepared: z.infer<typeof NigmaEducationalPreparationUpstreamSchema>,
+): NigmaHostPreparationResult {
+  const plan = prepared.integration_plan;
+  const runtime = plan.runtime_selection;
+  const route = prepared.agent_route;
+  const approval = prepared.approval_target;
+  const linksAgree = plan.request_id === prepared.capability_request.id
+    && approval.plan_id === plan.id
+    && approval.plan_digest === plan.digest
+    && approval.agent_route_id === route.id
+    && approval.agent_route_digest === route.digest
+    && approval.plugin_selection_id === prepared.plugin_selection.id
+    && approval.plugin_selection_digest === prepared.plugin_selection.digest
+    && approval.provider_binding_id === prepared.provider_binding.id
+    && approval.provider_binding_digest === prepared.provider_binding.digest
+    && route.plan_id === plan.id
+    && route.plan_digest === plan.digest
+    && route.runtime_selection_id === runtime.id
+    && route.runtime_selection_digest === runtime.digest
+    && route.plugin_selection_id === prepared.plugin_selection.id
+    && route.plugin_selection_digest === prepared.plugin_selection.digest
+    && route.provider_binding_id === prepared.provider_binding.id
+    && route.provider_binding_digest === prepared.provider_binding.digest
+    && route.runtime_id === runtime.selected_runtime_id
+    && route.runtime_version === runtime.selected_runtime_version
+    && route.runtime_snapshot_id === runtime.selected_snapshot_id
+    && route.runtime_snapshot_digest === runtime.selected_snapshot_digest;
+  if (!linksAgree) {
+    throw new NigmaHostError(
+      'NIGMA_PREPARATION_LINK_MISMATCH', 502,
+      'Nigma fallback returned inconsistent sealed replacement links',
+    );
+  }
+  const hostPreparationId = `host-preparation-${createHash('sha256')
+    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}`)
+    .digest('hex').slice(0, 32)}`;
+  return NigmaHostPreparationResultSchema.parse({
+    protocol_version: 'nigma.host-preparation/v1',
+    host_preparation_id: hostPreparationId,
+    status: 'awaiting_human_approval',
+    objective: prepared.capability_request.objective,
+    plan: {
+      id: plan.id, digest: plan.digest,
+      confidence: plan.confidence, risk_level: plan.risk_level,
+    },
+    runtime: {
+      id: runtime.selected_runtime_id, version: runtime.selected_runtime_version,
+      snapshot_id: runtime.selected_snapshot_id,
+      snapshot_digest: runtime.selected_snapshot_digest,
+    },
+    approval_target: approval,
+    resume: { method: 'POST', path: '/v1/runtime/nigma/host-runs', plan_id: plan.id },
+    approval_granted: false,
+    execution_performed: false,
+    evidence: [
+      `nigma_request:${prepared.capability_request.id}`,
+      `plan:${plan.id}`, `plan_digest:${plan.digest}`,
+      `agent_route:${route.id}`, `agent_route_digest:${route.digest}`,
+    ],
+  });
+}
+
+export async function prepareNigmaHostFallback(
+  hostRunId: string, idempotencyKey: string,
+): Promise<NigmaHostFallbackPreparation> {
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_IDEMPOTENCY_REQUIRED', 400, 'A bounded Idempotency-Key is required',
+    );
+  }
+  const record = await getNigmaHostRunRecord(hostRunId);
+  const failure = fallbackFailure(record);
+  const control = controlPlaneConfig();
+  const fallback = parseUpstream(NigmaRuntimeFallbackUpstreamSchema, await requestJson(
+    `${control.baseUrl}/runtime-invocations/${encodeURIComponent(failure.invocationId)}/fallbacks`,
+    {
+      method: 'POST',
+      headers: {
+        'X-API-Key': control.apiKey,
+        'Idempotency-Key': idempotencyKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        failure_code: failure.code,
+        observed_at: record.updated_at,
+        evidence_digest: record.record_digest,
+      }),
+    },
+    'Nigma runtime fallback endpoint',
+  ));
+  if (fallback.source_invocation_id !== failure.invocationId
+      || fallback.source_invocation_digest !== failure.invocationDigest
+      || fallback.source_plan_id !== record.plan_id
+      || fallback.failure_code !== failure.code
+      || fallback.evidence_digest !== record.record_digest
+      || !fallback.excluded_runtime_ids.includes(fallback.failed_runtime_id)) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_FALLBACK_LINK_MISMATCH', 502,
+      'Nigma fallback changed source failure or integrity evidence',
+    );
+  }
+  const replacement = projectFallbackPreparation(fallback.preparation);
+  if (replacement.runtime.id === fallback.failed_runtime_id) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_FALLBACK_LINK_MISMATCH', 502,
+      'Nigma fallback selected the failed runtime again',
+    );
+  }
+  return NigmaHostFallbackPreparationSchema.parse({
+    protocol_version: 'nigma.host-fallback-preparation/v1',
+    host_run_id: hostRunId,
+    fallback_id: fallback.id,
+    fallback_digest: fallback.digest,
+    status: 'awaiting_human_approval',
+    failure: { code: fallback.failure_code, evidence_digest: fallback.evidence_digest },
+    failed_runtime: {
+      id: fallback.failed_runtime_id, version: fallback.failed_runtime_version,
+      snapshot_id: fallback.failed_runtime_snapshot_id,
+      snapshot_digest: fallback.failed_runtime_snapshot_digest,
+    },
+    replacement,
+    approval_granted: false,
+    execution_performed: false,
+    evidence: [
+      `source_host_run:${hostRunId}`,
+      `source_record_digest:${record.record_digest}`,
+      `source_invocation:${failure.invocationId}`,
+      `fallback:${fallback.id}`,
+      `fallback_digest:${fallback.digest}`,
+    ],
+  });
+}
+
 const activeHostRuns = new Map<string, {
   requestDigest: string;
   promise: Promise<NigmaHostRunResult>;

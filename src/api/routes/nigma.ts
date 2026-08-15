@@ -17,6 +17,7 @@ import {
   getNigmaHostRunEvents,
   getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
+  prepareNigmaHostFallback,
   runApprovedNigmaPlan,
 } from '../../runtime/nigma_host';
 import { getRuntimeRepository } from '../../services/runtime_repository';
@@ -74,6 +75,25 @@ router.get('/host-runs/:host_run_id/events', authMiddleware, async (req, res, ne
       );
     }
     return res.json(await getNigmaHostRunEvents(req.params.host_run_id, Number(raw)));
+  } catch (error) {
+    if (error instanceof NigmaHostError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    return next(error);
+  }
+});
+
+router.post('/host-runs/:host_run_id/fallbacks', authMiddleware, async (req, res, next) => {
+  try {
+    if (req.body && Object.keys(req.body as Record<string, unknown>).length) {
+      throw new NigmaHostError(
+        'NIGMA_HOST_FALLBACK_BODY_FORBIDDEN', 400,
+        'Fallback evidence is derived from the sealed host record',
+      );
+    }
+    return res.json(await prepareNigmaHostFallback(
+      req.params.host_run_id, req.header('Idempotency-Key') ?? '',
+    ));
   } catch (error) {
     if (error instanceof NigmaHostError) {
       return res.status(error.status).json({ error: error.code, message: error.message });

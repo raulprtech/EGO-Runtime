@@ -114,6 +114,31 @@ credential or environment-variable name. Nigma's independent offline verifier
 and JSON-stdio fixture define the replaceable boundary; EGO is only its first
 live implementation.
 
+## Safe runtime fallback
+
+If a sealed host record ends before `runtime_accepted` with an eligible
+unreachable, unavailable or rejected-runtime failure, an authenticated host
+client may request a replacement:
+
+```http
+POST /v1/runtime/nigma/host-runs/<host_run_id>/fallbacks
+Authorization: Bearer <host-runtime-token>
+Idempotency-Key: <stable-fallback-key>
+Content-Type: application/json
+
+{}
+```
+
+The body must be empty. EGO derives failure code, observation time and evidence
+digest from the durable record and sends only that evidence to Nigma. The
+response presents a new exact plan and approval target with
+`approval_granted=false` and `execution_performed=false`. It cannot resume
+until a trusted actor separately approves the replacement in Nigma.
+
+Fallback is refused after any `runtime_accepted` event, including later host
+timeouts. At that point cancellation or exact retry/reconciliation is required
+to avoid double execution.
+
 ## Current limitation
 
 The execution request remains synchronous and intended for local integration;
