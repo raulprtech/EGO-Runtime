@@ -12,6 +12,9 @@ cannot execute a plan.
   human-decision token. None may enter model context or a mobile bundle.
 - EGO validates the exact sealed preparation, phrase and presentation window.
 - Nigma records the approval. A later, separate command must request execution.
+- EGO records a profile-scoped informational receipt after Nigma confirms the
+  approval. ARIA may read that receipt through its relay, but it cannot use the
+  feed to approve or execute.
 
 Hermes and EGO URLs must use HTTPS, except loopback HTTP for local testing.
 Embedded URL credentials, queries, fragments, redirects, shared runtime/human

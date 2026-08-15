@@ -28,6 +28,10 @@ import {
 } from '../../runtime/nigma_host';
 import { getRuntimeRepository } from '../../services/runtime_repository';
 import { TaskQueue } from '../../services/task_queue';
+import {
+  listNigmaDecisionEvents,
+  recordNigmaConversationDecisionEvent,
+} from '../../runtime/nigma_decision_events';
 
 const router = Router();
 
@@ -86,9 +90,13 @@ router.post(
   async (req, res, next) => {
     try {
       const submission = NigmaTrustedConversationDecisionRequestSchema.parse(req.body);
-      return res.json(await recordTrustedNigmaConversationDecision(
+      const result = await recordTrustedNigmaConversationDecision(
         submission, req.header('Idempotency-Key') ?? '',
-      ));
+      );
+      await recordNigmaConversationDecisionEvent(
+        result, req.header('X-Interface-Profile') ?? 'default',
+      );
+      return res.json(result);
     } catch (error) {
       if (error instanceof NigmaHostError) {
         return res.status(error.status).json({ error: error.code, message: error.message });
@@ -98,6 +106,21 @@ router.post(
     }
   },
 );
+
+router.get('/decision-events', authMiddleware, async (req, res, next) => {
+  try {
+    const profile = typeof req.query.profile === 'string' ? req.query.profile : 'default';
+    const rawLimit = typeof req.query.limit === 'string' ? req.query.limit : '20';
+    const limit = Number(rawLimit);
+    if (!/^\d{1,3}$/.test(rawLimit) || limit < 1 || limit > 100) {
+      return res.status(400).json({ error: 'NIGMA_DECISION_EVENT_LIMIT_INVALID' });
+    }
+    return res.json({ events: await listNigmaDecisionEvents(profile, limit) });
+  } catch (error) {
+    if (error instanceof ZodError) return next(error);
+    return next(error);
+  }
+});
 
 router.post('/host-runs', authMiddleware, async (req, res, next) => {
   try {

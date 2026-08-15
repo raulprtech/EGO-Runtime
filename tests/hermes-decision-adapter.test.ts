@@ -337,6 +337,10 @@ describe('Hermes trusted-decision sidecar', () => {
     });
     expect(wait).toHaveBeenCalledOnce();
     expect(writes).toHaveLength(1);
+    const egoDecisionCall = call.mock.calls.find(([input]) => (
+      String(input).includes('/conversation-decisions')
+    ));
+    expect(egoDecisionCall?.[1]?.headers).toMatchObject({ 'x-interface-profile': 'aria' });
     const replayCall = vi.fn();
     await expect(superviseHermesDecisionBinding({
       binding: result.binding, sessionRef: 'hermes-session-1', config: config(),

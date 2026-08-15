@@ -557,6 +557,7 @@ export async function scanHermesDecisionBinding(
       authorization: `Bearer ${config.egoRuntimeToken}`,
       'x-nigma-human-decision-token': config.humanDecisionToken,
       'idempotency-key': idempotencyKey,
+      'x-interface-profile': config.hermesProfile,
       'content-type': 'application/json',
       accept: 'application/json',
     },

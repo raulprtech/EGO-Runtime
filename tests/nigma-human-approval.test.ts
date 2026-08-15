@@ -309,6 +309,7 @@ describe('trusted Nigma human approval bridge', () => {
     const conversationHeaders = {
       ...commonHeaders,
       'X-Nigma-Human-Decision-Token': humanToken,
+      'X-Interface-Profile': 'aria',
       'Idempotency-Key': 'conversation-decision-1',
     };
 
@@ -410,6 +411,40 @@ describe('trusted Nigma human approval bridge', () => {
     await expect(conversationReplay.json()).resolves.toEqual(conversationResult);
     expect(approvalBodies).toHaveLength(2);
     expect(approvalBodies[1]).toEqual(approvalBodies[0]);
+
+    const eventsEndpoint = `${host.baseUrl}/v1/runtime/nigma/decision-events`;
+    const unauthorizedEvents = await fetch(`${eventsEndpoint}?profile=aria`);
+    expect(unauthorizedEvents.status).toBe(401);
+    const invalidLimit = await fetch(`${eventsEndpoint}?profile=aria&limit=0`, {
+      headers: { Authorization: `Bearer ${runtimeToken}` },
+    });
+    expect(invalidLimit.status).toBe(400);
+    const ariaEventsResponse = await fetch(`${eventsEndpoint}?profile=aria`, {
+      headers: { Authorization: `Bearer ${runtimeToken}` },
+    });
+    expect(ariaEventsResponse.status).toBe(200);
+    await expect(ariaEventsResponse.json()).resolves.toEqual({ events: [{
+      id: 'nigma-approval:approval-record-1',
+      type: 'background',
+      title: 'Aprobación registrada',
+      content: 'Nigma registró tu aprobación. La ejecución no comenzó; requiere un paso separado.',
+      timestamp: Date.parse('2026-08-15T00:15:00Z'),
+    }] });
+    const otherProfileResponse = await fetch(`${eventsEndpoint}?profile=other`, {
+      headers: { Authorization: `Bearer ${runtimeToken}` },
+    });
+    await expect(otherProfileResponse.json()).resolves.toEqual({ events: [] });
+    const decisionEventFiles = await fs.readdir(path.join(localData, 'nigma-decision-events'));
+    expect(decisionEventFiles).toHaveLength(1);
+    const decisionEventFile = path.join(
+      localData, 'nigma-decision-events', decisionEventFiles[0],
+    );
+    expect((await fs.stat(decisionEventFile)).mode & 0o777).toBe(0o600);
+    const storedDecisionEvent = await fs.readFile(decisionEventFile, 'utf8');
+    expect(storedDecisionEvent).not.toContain('"aria"');
+    expect(storedDecisionEvent).toContain('"execution_performed": false');
+    await expect(fs.readdir(path.join(localData, 'nigma-host-runs')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
 
     const approved = await fetch(endpoint, {
       method: 'POST',
