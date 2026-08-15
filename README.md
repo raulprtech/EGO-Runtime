@@ -50,6 +50,8 @@ The credential-free provider uses the versioned `deterministic-bilingual-v1` ass
 
 See [local development](docs/local-development.md), [Nigma handoff](docs/nigma-handoff.md), [Nigma host orchestration](docs/nigma-host-orchestration.md), [F4.6 host events](docs/f4.6-runtime-neutral-host-events-result-2026-08-14.md), [deterministic demo provider](docs/deterministic-demo-provider.md), [turn-based audio](docs/turn-based-audio.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
+G1.1 adds a host-independent educational decision adapter. `POST /v1/runtime/nigma/educational-tasks/prepare` forwards only objective and bounded local material references, validates Nigma's sealed route and returns a compact human-review projection. It never approves or executes; the existing `/host-runs` resumes only after Nigma independently confirms an exact current approval. See [the G1.1 result](docs/g1.1-nigma-host-decision-adapter-result-2026-08-14.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.

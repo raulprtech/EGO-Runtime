@@ -1,0 +1,247 @@
+import express from 'express';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createApp } from '../server';
+
+async function listen(app: express.Express) {
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) =>
+      server.close(error => error ? reject(error) : resolve())),
+  };
+}
+
+const digest = (value: string) => value.repeat(64).slice(0, 64);
+
+function task() {
+  return {
+    objective: 'Crear un plan de estudio acotado con mis notas locales',
+    materials: [{
+      uri: 'file:///controlled/course/notes.md',
+      media_type: 'text/markdown',
+      schema_ref: 'schema://learning-material/v1',
+      sha256: digest('a'),
+      size_bytes: 512,
+    }],
+    project: 'education-local',
+    max_duration_seconds: 600,
+    required_runtime_capabilities: ['educational_execution'],
+  };
+}
+
+function nigmaPreparation() {
+  const plan = { id: 'plan-1', digest: digest('b') };
+  const plugin = { id: 'plugin-selection-1', digest: digest('c') };
+  const provider = { id: 'provider-binding-1', digest: digest('d') };
+  const route = { id: 'agent-route-1', digest: digest('e') };
+  return {
+    protocol_version: 'nigma.educational-task-preparation/v1',
+    status: 'awaiting_human_approval',
+    capability_request: { id: 'request-1', objective: task().objective },
+    integration_plan: {
+      ...plan,
+      request_id: 'request-1',
+      confidence: 0.75,
+      risk_level: 'medium',
+      runtime_selection: {
+        id: 'runtime-selection-1',
+        digest: digest('8'),
+        selected_snapshot_id: 'ego-runtime@0.9.0',
+        selected_snapshot_digest: digest('f'),
+        selected_runtime_id: 'ego-runtime',
+        selected_runtime_version: '0.9.0',
+      },
+    },
+    plugin_selection: { ...plugin, status: 'selected' },
+    provider_binding: { ...provider, status: 'ready' },
+    agent_route: {
+      ...route,
+      plan_id: plan.id,
+      plan_digest: plan.digest,
+      runtime_selection_id: 'runtime-selection-1',
+      runtime_selection_digest: digest('8'),
+      plugin_selection_id: plugin.id,
+      plugin_selection_digest: plugin.digest,
+      provider_binding_id: provider.id,
+      provider_binding_digest: provider.digest,
+      runtime_id: 'ego-runtime',
+      runtime_version: '0.9.0',
+      runtime_snapshot_id: 'ego-runtime@0.9.0',
+      runtime_snapshot_digest: digest('f'),
+      status: 'ready',
+      approval_granted: false,
+      execution_performed: false,
+    },
+    approval_target: {
+      scope: 'execute',
+      plan_id: plan.id,
+      plan_digest: plan.digest,
+      agent_route_id: route.id,
+      agent_route_digest: route.digest,
+      plugin_selection_id: plugin.id,
+      plugin_selection_digest: plugin.digest,
+      provider_binding_id: provider.id,
+      provider_binding_digest: provider.digest,
+    },
+    approval_granted: false,
+    execution_performed: false,
+  };
+}
+
+describe('Nigma educational host preparation', () => {
+  const closers: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    while (closers.length) await closers.pop()?.();
+    for (const name of [
+      'INTERNAL_RUNTIME_TOKEN', 'NIGMA_CONTROL_PLANE_URL',
+      'NIGMA_CONTROL_PLANE_API_KEY', 'NIGMA_HOST_TIMEOUT_MS',
+    ]) delete process.env[name];
+  });
+
+  async function runtimeFor(control: express.Express) {
+    const controlServer = await listen(control);
+    closers.push(controlServer.close);
+    process.env.INTERNAL_RUNTIME_TOKEN = 'host-test-token';
+    process.env.NIGMA_CONTROL_PLANE_URL = controlServer.baseUrl;
+    process.env.NIGMA_CONTROL_PLANE_API_KEY = 'control-test-key';
+    process.env.NIGMA_HOST_TIMEOUT_MS = '2000';
+    const runtime = await listen(await createApp());
+    closers.push(runtime.close);
+    return runtime;
+  }
+
+  const headers = {
+    Authorization: 'Bearer host-test-token',
+    'Content-Type': 'application/json',
+    'Idempotency-Key': 'prepare-study-1',
+  };
+
+  it('projects a bounded human decision and creates no approval or execution', async () => {
+    const control = express();
+    control.use(express.json());
+    let preparations = 0;
+    control.post('/educational-tasks/prepare', (req, res) => {
+      expect(req.header('x-api-key')).toBe('control-test-key');
+      expect(req.header('idempotency-key')).toBe('prepare-study-1');
+      expect(req.body).toEqual(task());
+      preparations += 1;
+      res.json(nigmaPreparation());
+    });
+    const runtime = await runtimeFor(control);
+
+    const response = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers, body: JSON.stringify(task()) },
+    );
+    const result = await response.json();
+    expect(response.status, JSON.stringify(result)).toBe(200);
+    expect(result).toMatchObject({
+      protocol_version: 'nigma.host-preparation/v1',
+      status: 'awaiting_human_approval',
+      objective: task().objective,
+      plan: { id: 'plan-1', digest: digest('b') },
+      runtime: { id: 'ego-runtime', version: '0.9.0' },
+      approval_target: {
+        scope: 'execute',
+        plan_id: 'plan-1',
+        agent_route_id: 'agent-route-1',
+      },
+      resume: {
+        method: 'POST',
+        path: '/v1/runtime/nigma/host-runs',
+        plan_id: 'plan-1',
+      },
+      approval_granted: false,
+      execution_performed: false,
+    });
+    expect(preparations).toBe(1);
+  });
+
+  it('requires auth and a bounded idempotency key before contacting Nigma', async () => {
+    const control = express();
+    control.use(express.json());
+    let contacted = 0;
+    control.post('/educational-tasks/prepare', (_req, res) => {
+      contacted += 1;
+      res.json(nigmaPreparation());
+    });
+    const runtime = await runtimeFor(control);
+    const url = `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`;
+
+    const unauthenticated = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(task()),
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const noKey = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: headers.Authorization, 'Content-Type': 'application/json' },
+      body: JSON.stringify(task()),
+    });
+    expect(noKey.status).toBe(400);
+    await expect(noKey.json()).resolves.toMatchObject({
+      error: 'NIGMA_HOST_IDEMPOTENCY_REQUIRED',
+    });
+    expect(contacted).toBe(0);
+  });
+
+  it('rejects altered links or a preparation claiming authority', async () => {
+    for (const changed of [
+      { ...nigmaPreparation(), approval_target: {
+        ...nigmaPreparation().approval_target, agent_route_digest: digest('9'),
+      } },
+      { ...nigmaPreparation(), approval_granted: true },
+    ]) {
+      const control = express();
+      control.use(express.json());
+      control.post('/educational-tasks/prepare', (_req, res) => res.json(changed));
+      const runtime = await runtimeFor(control);
+      const response = await fetch(
+        `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+        { method: 'POST', headers, body: JSON.stringify(task()) },
+      );
+      expect(response.status).toBe(502);
+      const body = await response.json() as { error: string };
+      expect([
+        'NIGMA_PREPARATION_LINK_MISMATCH', 'NIGMA_HOST_UPSTREAM_INVALID',
+      ]).toContain(body.error);
+      await closers.pop()?.();
+      await closers.pop()?.();
+    }
+  });
+
+  it('cannot resume when approval is absent or expired', async () => {
+    for (const code of ['approval_required', 'approval_expired']) {
+      const control = express();
+      control.use(express.json());
+      control.post('/integration-plans/:plan_id/runtime-invocations', (_req, res) => {
+        res.status(403).json({ error: { code, message: code } });
+      });
+      const runtime = await runtimeFor(control);
+      const response = await fetch(`${runtime.baseUrl}/v1/runtime/nigma/host-runs`, {
+        method: 'POST',
+        headers: { ...headers, 'Idempotency-Key': `resume-${code}` },
+        body: JSON.stringify({
+          plan_id: 'plan-1',
+          learner_context: { user_id: 'u', session_id: 's', objective_id: 'o' },
+        }),
+      });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        error: 'NIGMA_HOST_UPSTREAM_REJECTED',
+        message: expect.stringContaining(code),
+      });
+      await closers.pop()?.();
+      await closers.pop()?.();
+    }
+  });
+});

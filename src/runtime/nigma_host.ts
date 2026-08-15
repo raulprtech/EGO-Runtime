@@ -21,6 +21,50 @@ export const NigmaHostRunRequestSchema = z.object({
 }).strict();
 export type NigmaHostRunRequest = z.infer<typeof NigmaHostRunRequestSchema>;
 
+const EducationalMaterialReferenceSchema = z.object({
+  uri: z.string().min(8).max(2000),
+  media_type: z.string().min(1).max(200).default('application/octet-stream'),
+  schema_ref: z.string().min(3).max(500).default('schema://learning-material/v1'),
+  sha256: Digest.optional(),
+  size_bytes: z.number().int().min(0).max(2_000_000_000).optional(),
+}).strict().superRefine((value, context) => {
+  let parsed: URL;
+  try { parsed = new URL(value.uri); } catch {
+    context.addIssue({ code: 'custom', message: 'material URI is invalid' });
+    return;
+  }
+  if (parsed.protocol !== 'file:' || !parsed.pathname) {
+    context.addIssue({ code: 'custom', message: 'materials must use file:// references' });
+  }
+  if (parsed.hostname && parsed.hostname !== 'localhost') {
+    context.addIssue({ code: 'custom', message: 'material file references must remain local' });
+  }
+  if (parsed.username || parsed.password) {
+    context.addIssue({ code: 'custom', message: 'material references cannot contain credentials' });
+  }
+});
+
+export const NigmaEducationalPreparationRequestSchema = z.object({
+  objective: z.string().min(3).max(4000),
+  materials: z.array(EducationalMaterialReferenceSchema).min(1).max(20),
+  project: z.string().min(1).max(200).default('education'),
+  max_duration_seconds: z.number().int().min(30).max(86_400).default(600),
+  required_runtime_capabilities: z.array(z.enum([
+    'educational_execution', 'assessment', 'mastery_tracking',
+  ])).min(1).max(3).default(['educational_execution']),
+}).strict().superRefine((value, context) => {
+  if (!value.required_runtime_capabilities.includes('educational_execution')) {
+    context.addIssue({ code: 'custom', message: 'educational_execution is always required' });
+  }
+  if (new Set(value.required_runtime_capabilities).size
+      !== value.required_runtime_capabilities.length) {
+    context.addIssue({ code: 'custom', message: 'runtime capabilities cannot repeat' });
+  }
+});
+export type NigmaEducationalPreparationRequest = z.infer<
+  typeof NigmaEducationalPreparationRequestSchema
+>;
+
 const RuntimeRouteSchema = z.object({
   runtime_id: z.string().min(1).max(200),
   runtime_version: z.string().min(1).max(100),
@@ -146,6 +190,103 @@ export const NigmaHostRunResultSchema = z.object({
   events: z.array(NigmaHostEventSchema).min(1).max(10_000),
 }).strict();
 export type NigmaHostRunResult = z.infer<typeof NigmaHostRunResultSchema>;
+
+const PreparationApprovalTargetSchema = z.object({
+  scope: z.literal('execute'),
+  plan_id: BoundedId,
+  plan_digest: Digest,
+  agent_route_id: BoundedId,
+  agent_route_digest: Digest,
+  plugin_selection_id: BoundedId,
+  plugin_selection_digest: Digest,
+  provider_binding_id: BoundedId,
+  provider_binding_digest: Digest,
+}).strict();
+
+const NigmaEducationalPreparationUpstreamSchema = z.object({
+  protocol_version: z.literal('nigma.educational-task-preparation/v1'),
+  status: z.literal('awaiting_human_approval'),
+  capability_request: z.object({
+    id: BoundedId,
+    objective: z.string().min(3).max(4000),
+  }).passthrough(),
+  integration_plan: z.object({
+    id: BoundedId,
+    request_id: BoundedId,
+    digest: Digest,
+    confidence: z.number().min(0).max(1),
+    risk_level: z.enum(['low', 'medium', 'high', 'critical']),
+    runtime_selection: z.object({
+      id: BoundedId,
+      digest: Digest,
+      selected_snapshot_id: BoundedId,
+      selected_snapshot_digest: Digest,
+      selected_runtime_id: z.string().min(1).max(200),
+      selected_runtime_version: z.string().min(1).max(100),
+    }).passthrough(),
+  }).passthrough(),
+  plugin_selection: z.object({
+    id: BoundedId,
+    digest: Digest,
+    status: z.literal('selected'),
+  }).passthrough(),
+  provider_binding: z.object({
+    id: BoundedId,
+    digest: Digest,
+    status: z.literal('ready'),
+  }).passthrough(),
+  agent_route: z.object({
+    id: BoundedId,
+    digest: Digest,
+    plan_id: BoundedId,
+    plan_digest: Digest,
+    runtime_selection_id: BoundedId,
+    runtime_selection_digest: Digest,
+    plugin_selection_id: BoundedId,
+    plugin_selection_digest: Digest,
+    provider_binding_id: BoundedId,
+    provider_binding_digest: Digest,
+    runtime_id: z.string().min(1).max(200),
+    runtime_version: z.string().min(1).max(100),
+    runtime_snapshot_id: BoundedId,
+    runtime_snapshot_digest: Digest,
+    status: z.literal('ready'),
+    approval_granted: z.literal(false),
+    execution_performed: z.literal(false),
+  }).passthrough(),
+  approval_target: PreparationApprovalTargetSchema,
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+}).passthrough();
+
+export const NigmaHostPreparationResultSchema = z.object({
+  protocol_version: z.literal('nigma.host-preparation/v1'),
+  host_preparation_id: BoundedId,
+  status: z.literal('awaiting_human_approval'),
+  objective: z.string().min(3).max(4000),
+  plan: z.object({
+    id: BoundedId,
+    digest: Digest,
+    confidence: z.number().min(0).max(1),
+    risk_level: z.enum(['low', 'medium', 'high', 'critical']),
+  }).strict(),
+  runtime: z.object({
+    id: z.string().min(1).max(200),
+    version: z.string().min(1).max(100),
+    snapshot_id: BoundedId,
+    snapshot_digest: Digest,
+  }).strict(),
+  approval_target: PreparationApprovalTargetSchema,
+  resume: z.object({
+    method: z.literal('POST'),
+    path: z.literal('/v1/runtime/nigma/host-runs'),
+    plan_id: BoundedId,
+  }).strict(),
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+  evidence: z.array(z.string().min(1).max(500)).min(1).max(20),
+}).strict();
+export type NigmaHostPreparationResult = z.infer<typeof NigmaHostPreparationResultSchema>;
 
 export class NigmaHostError extends Error {
   constructor(readonly code: string, readonly status: number, message: string) {
@@ -286,6 +427,99 @@ function authHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
+
+export async function prepareNigmaEducationalTask(
+  request: NigmaEducationalPreparationRequest,
+  idempotencyKey: string,
+): Promise<NigmaHostPreparationResult> {
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_IDEMPOTENCY_REQUIRED', 400, 'A bounded Idempotency-Key is required',
+    );
+  }
+  const control = controlPlaneConfig();
+  const prepared = parseUpstream(NigmaEducationalPreparationUpstreamSchema, await requestJson(
+    `${control.baseUrl}/educational-tasks/prepare`,
+    {
+      method: 'POST',
+      headers: {
+        'X-API-Key': control.apiKey,
+        'Idempotency-Key': idempotencyKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    },
+    'Nigma educational preparation endpoint',
+  ));
+  const plan = prepared.integration_plan;
+  const runtime = plan.runtime_selection;
+  const route = prepared.agent_route;
+  const approval = prepared.approval_target;
+  const linksAgree = prepared.capability_request.objective === request.objective
+    && plan.request_id === prepared.capability_request.id
+    && approval.plan_id === plan.id
+    && approval.plan_digest === plan.digest
+    && approval.agent_route_id === route.id
+    && approval.agent_route_digest === route.digest
+    && approval.plugin_selection_id === prepared.plugin_selection.id
+    && approval.plugin_selection_digest === prepared.plugin_selection.digest
+    && approval.provider_binding_id === prepared.provider_binding.id
+    && approval.provider_binding_digest === prepared.provider_binding.digest
+    && route.plan_id === plan.id
+    && route.plan_digest === plan.digest
+    && route.runtime_selection_id === runtime.id
+    && route.runtime_selection_digest === runtime.digest
+    && route.plugin_selection_id === prepared.plugin_selection.id
+    && route.plugin_selection_digest === prepared.plugin_selection.digest
+    && route.provider_binding_id === prepared.provider_binding.id
+    && route.provider_binding_digest === prepared.provider_binding.digest
+    && route.runtime_id === runtime.selected_runtime_id
+    && route.runtime_version === runtime.selected_runtime_version
+    && route.runtime_snapshot_id === runtime.selected_snapshot_id
+    && route.runtime_snapshot_digest === runtime.selected_snapshot_digest;
+  if (!linksAgree) {
+    throw new NigmaHostError(
+      'NIGMA_PREPARATION_LINK_MISMATCH', 502,
+      'Nigma preparation returned inconsistent sealed links',
+    );
+  }
+  const hostPreparationId = `host-preparation-${createHash('sha256')
+    .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}`)
+    .digest('hex').slice(0, 32)}`;
+  return NigmaHostPreparationResultSchema.parse({
+    protocol_version: 'nigma.host-preparation/v1',
+    host_preparation_id: hostPreparationId,
+    status: 'awaiting_human_approval',
+    objective: request.objective,
+    plan: {
+      id: plan.id,
+      digest: plan.digest,
+      confidence: plan.confidence,
+      risk_level: plan.risk_level,
+    },
+    runtime: {
+      id: runtime.selected_runtime_id,
+      version: runtime.selected_runtime_version,
+      snapshot_id: runtime.selected_snapshot_id,
+      snapshot_digest: runtime.selected_snapshot_digest,
+    },
+    approval_target: approval,
+    resume: {
+      method: 'POST',
+      path: '/v1/runtime/nigma/host-runs',
+      plan_id: plan.id,
+    },
+    approval_granted: false,
+    execution_performed: false,
+    evidence: [
+      `nigma_request:${prepared.capability_request.id}`,
+      `plan:${plan.id}`,
+      `plan_digest:${plan.digest}`,
+      `agent_route:${route.id}`,
+      `agent_route_digest:${route.digest}`,
+    ],
+  });
+}
 export async function runApprovedNigmaPlan(
   request: NigmaHostRunRequest,
   idempotencyKey: string,

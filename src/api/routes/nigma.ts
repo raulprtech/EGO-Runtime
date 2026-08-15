@@ -10,12 +10,33 @@ import {
   NigmaInvocationSubmissionSchema,
   validateAndMapNigmaSubmission,
 } from '../../runtime/nigma_handoff';
-import { NigmaHostError, NigmaHostRunRequestSchema, runApprovedNigmaPlan }
-  from '../../runtime/nigma_host';
+import {
+  NigmaEducationalPreparationRequestSchema,
+  NigmaHostError,
+  NigmaHostRunRequestSchema,
+  prepareNigmaEducationalTask,
+  runApprovedNigmaPlan,
+} from '../../runtime/nigma_host';
 import { getRuntimeRepository } from '../../services/runtime_repository';
 import { TaskQueue } from '../../services/task_queue';
 
 const router = Router();
+
+router.post('/educational-tasks/prepare', authMiddleware, async (req, res, next) => {
+  try {
+    const request = NigmaEducationalPreparationRequestSchema.parse(req.body);
+    const result = await prepareNigmaEducationalTask(
+      request, req.header('Idempotency-Key') ?? '',
+    );
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof NigmaHostError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    if (error instanceof ZodError) return next(error);
+    return next(error);
+  }
+});
 
 router.post('/host-runs', authMiddleware, async (req, res, next) => {
   try {

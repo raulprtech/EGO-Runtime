@@ -2,6 +2,24 @@
 
 EGO 0.9 can act as a reference host runtime for an already approved Nigma plan. The host requests the immutable invocation, routes it to an exact runtime identity/version, waits for a terminal state, retrieves the bounded receipt and posts that receipt back to Nigma.
 
+## Prepare and present before approval
+
+The neutral host can prepare an educational route without Hermes and without receiving approval authority:
+
+```http
+POST /v1/runtime/nigma/educational-tasks/prepare
+Authorization: Bearer <host-runtime-token>
+Idempotency-Key: <stable-preparation-key>
+Content-Type: application/json
+
+{
+  "objective": "Create a bounded study plan",
+  "materials": [{ "uri": "file:///controlled/course/notes.md" }]
+}
+```
+
+The response uses `nigma.host-preparation/v1` and contains a compact plan/runtime summary, the exact plan/route/plugin/provider approval target and the fixed `/v1/runtime/nigma/host-runs` resume path. It is always `awaiting_human_approval`; EGO has no endpoint that records the decision. A trusted actor must submit the exact approval to Nigma separately. Calling the resume endpoint before that decision, after expiry or after any sealed-link change fails before runtime routing.
+
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
 ```http
