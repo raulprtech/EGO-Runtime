@@ -20,7 +20,8 @@ it in model context or a mobile bundle.
 
 The optional Hermes conversation sidecar additionally reads
 `HERMES_CHAT_URL`, `HERMES_CHAT_API_KEY`, `EGO_RUNTIME_URL` and
-`EGO_RUNTIME_TOKEN`. These are process-owned transport settings; they must not
+`EGO_RUNTIME_TOKEN`; set `HERMES_PROFILE` to the exact owning profile, such as
+`aria`. These are process-owned transport settings; they must not
 be sent to a model, stored in ARIA or written into its sealed binding. See the
 [sidecar guide](hermes-decision-sidecar.md).
 

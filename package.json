@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --import tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && npm run build:hermes-decision",
+    "build:hermes-decision": "esbuild scripts/hermes-decision-adapter.ts --bundle --platform=node --format=cjs --packages=bundle --sourcemap --outfile=dist/hermes-decision-adapter.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
