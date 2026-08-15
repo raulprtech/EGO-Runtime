@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ZodError } from 'zod';
-import { authMiddleware } from '../auth';
+import { authMiddleware, humanDecisionMiddleware } from '../auth';
 import { unsupportedCapabilities } from '../../runtime/manifest';
 import { approvalRequestDigest } from '../../runtime/integrity';
 import {
@@ -15,11 +15,13 @@ import {
   NigmaPresentationLocaleSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
+  NigmaTrustedHumanApprovalRequestSchema,
   getNigmaHostRunEvents,
   getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
   prepareNigmaHostFallback,
   renderNigmaHostPreparationSse,
+  recordTrustedNigmaHumanApproval,
   runApprovedNigmaPlan,
 } from '../../runtime/nigma_host';
 import { getRuntimeRepository } from '../../services/runtime_repository';
@@ -54,6 +56,26 @@ router.post('/educational-tasks/prepare', authMiddleware, async (req, res, next)
     return next(error);
   }
 });
+
+router.post(
+  '/human-approvals',
+  authMiddleware,
+  humanDecisionMiddleware,
+  async (req, res, next) => {
+    try {
+      const submission = NigmaTrustedHumanApprovalRequestSchema.parse(req.body);
+      return res.json(await recordTrustedNigmaHumanApproval(
+        submission, req.header('Idempotency-Key') ?? '',
+      ));
+    } catch (error) {
+      if (error instanceof NigmaHostError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
+      if (error instanceof ZodError) return next(error);
+      return next(error);
+    }
+  },
+);
 
 router.post('/host-runs', authMiddleware, async (req, res, next) => {
   try {

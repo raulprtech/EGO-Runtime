@@ -37,6 +37,7 @@ export async function createApp() {
     exposedHeaders: [
       'X-Speech-Id', 'X-Speech-Provider', 'X-Audio-Sample-Rate',
       'X-Audio-Channels', 'X-Audio-Duration-Ms',
+      'X-Nigma-Projection-Digest',
     ],
   }));
   app.use(express.json({ limit: '256kb' }));

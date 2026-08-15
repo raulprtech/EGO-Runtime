@@ -58,6 +58,41 @@ The server returns `X-Nigma-Projection-Digest` and does not treat a generic
 remain readable as JSON; an explicit SSE request for one fails with 406 instead
 of manufacturing presentation text.
 
+## Record an exact human decision
+
+G1.8 gives a trusted host/UI adapter a narrow approval-write path without
+giving the model or normal runtime bearer token approval authority:
+
+```http
+POST /v1/runtime/nigma/human-approvals
+Authorization: Bearer <host-runtime-token>
+X-Nigma-Human-Decision-Token: <independent-human-channel-secret>
+Idempotency-Key: <stable-human-decision-key>
+Content-Type: application/json
+
+{
+  "protocol_version": "nigma.trusted-human-approval-submission/v1",
+  "host_preparation_id": "host-preparation-...",
+  "interface_projection_id": "host-preparation-interface-...",
+  "interface_projection_digest": "<64-hex>",
+  "approval_phrase": "<exact phrase displayed to the human>",
+  "approver": "local-owner",
+  "expires_at": "<absolute ISO-8601 timestamp>"
+}
+```
+
+Preparation persists an owner-only sealed challenge for two hours. It contains
+only identities, the exact approval target, phrase SHA-256 and timestamps; raw
+objective, materials and phrase are absent. The approval endpoint reloads this
+challenge after restart and rejects missing/expired challenges, changed
+projection links, altered phrases, invalid expiries, missing idempotency and a
+human credential equal to the runtime credential.
+
+On success EGO asks Nigma to record the exact approval, verifies Nigma's full
+response and returns a separately sealed record. It does not request an
+invocation, contact a selected runtime or execute. A later `/host-runs` call is
+still required and Nigma remains authoritative for approval validity.
+
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
 ```http
@@ -103,6 +138,7 @@ Required configuration:
 ```dotenv
 NIGMA_CONTROL_PLANE_URL=http://127.0.0.1:8000
 NIGMA_CONTROL_PLANE_API_KEY=<host-to-nigma-secret>
+NIGMA_HUMAN_DECISION_TOKEN=<independent-human-channel-secret>
 NIGMA_HOST_ROUTES_FILE=config/nigma-host-routes.example.json
 NIGMA_RUNTIME_TOKEN_EGO=<host-to-runtime-secret>
 ```

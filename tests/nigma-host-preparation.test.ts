@@ -1,5 +1,7 @@
 import express from 'express';
+import fs from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../server';
 import { canonicalJson, sha256 } from '../src/runtime/integrity';
@@ -145,12 +147,14 @@ function nigmaPreparation(includeExplanation = true) {
 
 describe('Nigma educational host preparation', () => {
   const closers: Array<() => Promise<void>> = [];
+  const directories: string[] = [];
 
   afterEach(async () => {
     while (closers.length) await closers.pop()?.();
+    while (directories.length) await fs.rm(directories.pop()!, { recursive: true, force: true });
     for (const name of [
       'INTERNAL_RUNTIME_TOKEN', 'NIGMA_CONTROL_PLANE_URL',
-      'NIGMA_CONTROL_PLANE_API_KEY', 'NIGMA_HOST_TIMEOUT_MS',
+      'NIGMA_CONTROL_PLANE_API_KEY', 'NIGMA_HOST_TIMEOUT_MS', 'LOCAL_DATA_DIR',
     ]) delete process.env[name];
   });
 
@@ -161,6 +165,9 @@ describe('Nigma educational host preparation', () => {
     process.env.NIGMA_CONTROL_PLANE_URL = controlServer.baseUrl;
     process.env.NIGMA_CONTROL_PLANE_API_KEY = 'control-test-key';
     process.env.NIGMA_HOST_TIMEOUT_MS = '2000';
+    const localData = await fs.mkdtemp(path.join('/tmp', 'ego-host-preparation-'));
+    directories.push(localData);
+    process.env.LOCAL_DATA_DIR = localData;
     const runtime = await listen(await createApp());
     closers.push(runtime.close);
     return runtime;

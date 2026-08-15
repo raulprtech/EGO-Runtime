@@ -518,6 +518,77 @@ export const NigmaHostPreparationResultSchema = z.object({
 }).strict();
 export type NigmaHostPreparationResult = z.infer<typeof NigmaHostPreparationResultSchema>;
 
+export const NigmaTrustedHumanApprovalRequestSchema = z.object({
+  protocol_version: z.literal('nigma.trusted-human-approval-submission/v1'),
+  host_preparation_id: BoundedId,
+  interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  interface_projection_digest: Digest,
+  approval_phrase: z.string().min(1).max(1000),
+  approver: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/),
+  expires_at: z.iso.datetime(),
+}).strict();
+export type NigmaTrustedHumanApprovalRequest = z.infer<
+  typeof NigmaTrustedHumanApprovalRequestSchema
+>;
+
+const NigmaApprovalUpstreamSchema = z.object({
+  id: BoundedId,
+  plan_id: BoundedId,
+  approver: z.string().min(1).max(128),
+  decision: z.literal('approved'),
+  expires_at: z.iso.datetime(),
+  created_at: z.iso.datetime(),
+  evidence: z.record(z.string(), z.unknown()),
+  scope: z.literal('execute'),
+  plan_digest: Digest,
+  agent_route_id: BoundedId,
+  agent_route_digest: Digest,
+  plugin_selection_id: BoundedId,
+  plugin_selection_digest: Digest,
+  provider_binding_id: BoundedId,
+  provider_binding_digest: Digest,
+}).passthrough();
+
+export const NigmaTrustedHumanApprovalResultSchema = z.object({
+  protocol_version: z.literal('nigma.trusted-human-approval-record/v1'),
+  approval_id: BoundedId,
+  plan_id: BoundedId,
+  plan_digest: Digest,
+  agent_route_id: BoundedId,
+  agent_route_digest: Digest,
+  approver: z.string().min(1).max(128),
+  decision: z.literal('approved'),
+  created_at: z.iso.datetime(),
+  expires_at: z.iso.datetime(),
+  source_host_preparation_id: BoundedId,
+  source_interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  source_interface_projection_digest: Digest,
+  approval_phrase_sha256: Digest,
+  authority: z.literal('trusted_human_adapter'),
+  approval_recorded: z.literal(true),
+  execution_performed: z.literal(false),
+  digest: Digest,
+}).strict();
+export type NigmaTrustedHumanApprovalResult = z.infer<
+  typeof NigmaTrustedHumanApprovalResultSchema
+>;
+
+const NigmaHumanApprovalChallengeCoreSchema = z.object({
+  protocol_version: z.literal('nigma.human-approval-challenge/v1'),
+  host_preparation_id: BoundedId,
+  interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  interface_projection_digest: Digest,
+  approval_phrase_sha256: Digest,
+  approval_target: PreparationApprovalTargetSchema,
+  created_at: z.iso.datetime(),
+  expires_at: z.iso.datetime(),
+}).strict();
+
+const NigmaHumanApprovalChallengeSchema = NigmaHumanApprovalChallengeCoreSchema.extend({
+  record_digest: Digest,
+}).strict();
+type NigmaHumanApprovalChallenge = z.infer<typeof NigmaHumanApprovalChallengeSchema>;
+
 const FACTOR_LABELS: Record<string, Record<PresentationLocale, string>> = {
   capability_coverage: { 'es-MX': 'cobertura de capacidades', 'en-US': 'capability coverage' },
   reliability: { 'es-MX': 'confiabilidad', 'en-US': 'reliability' },
@@ -773,6 +844,138 @@ export function renderNigmaHostPreparationSse(result: NigmaHostPreparationResult
   )).join('\n')}\n`;
 }
 
+async function verifyTrustedApprovalPreparation(
+  submission: NigmaTrustedHumanApprovalRequest,
+): Promise<{
+  challenge: NigmaHumanApprovalChallenge;
+  phraseHash: string;
+}> {
+  const challenge = await readHumanChallengeOrNull(submission.host_preparation_id);
+  if (!challenge) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_CHALLENGE_NOT_FOUND', 404,
+      'Human approval challenge was not found',
+    );
+  }
+  const phraseHash = sha256(submission.approval_phrase);
+  const linksAgree = submission.interface_projection_id === challenge.interface_projection_id
+    && submission.interface_projection_digest === challenge.interface_projection_digest
+    && phraseHash === challenge.approval_phrase_sha256;
+  if (!linksAgree) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_INTEGRITY_MISMATCH', 409,
+      'Human approval submission does not match the exact sealed preparation',
+    );
+  }
+  if (Date.parse(challenge.expires_at) <= Date.now()) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_CHALLENGE_EXPIRED', 410,
+      'Human approval challenge has expired and must be presented again',
+    );
+  }
+  return { challenge, phraseHash };
+}
+
+export async function recordTrustedNigmaHumanApproval(
+  submission: NigmaTrustedHumanApprovalRequest,
+  idempotencyKey: string,
+): Promise<NigmaTrustedHumanApprovalResult> {
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_IDEMPOTENCY_REQUIRED', 400, 'A bounded Idempotency-Key is required',
+    );
+  }
+  const expiresAtMs = Date.parse(submission.expires_at);
+  const now = Date.now();
+  if (expiresAtMs < now + 60_000 || expiresAtMs > now + 7_200_000) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_EXPIRY_INVALID', 400,
+      'Human approval expiry must be between one minute and two hours in the future',
+    );
+  }
+  const { challenge, phraseHash } = await verifyTrustedApprovalPreparation(submission);
+  if (expiresAtMs > Date.parse(challenge.expires_at)) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_EXPIRY_INVALID', 400,
+      'Human approval cannot outlive its presentation challenge',
+    );
+  }
+  const target = challenge.approval_target;
+  const expiresAt = new Date(expiresAtMs).toISOString();
+  const evidence = {
+    protocol_version: 'nigma.trusted-human-decision-evidence/v1',
+    channel: 'trusted_host_adapter',
+    source_host_preparation_id: challenge.host_preparation_id,
+    source_interface_projection_id: challenge.interface_projection_id,
+    source_interface_projection_digest: challenge.interface_projection_digest,
+    approval_phrase_sha256: phraseHash,
+  };
+  const control = controlPlaneConfig();
+  const approval = parseUpstream(NigmaApprovalUpstreamSchema, await requestJson(
+    `${control.baseUrl}/integration-plans/${encodeURIComponent(target.plan_id)}/approvals`,
+    {
+      method: 'POST',
+      headers: {
+        'X-API-Key': control.apiKey,
+        'Idempotency-Key': idempotencyKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        approver: submission.approver,
+        decision: 'approved',
+        expires_at: expiresAt,
+        evidence,
+        ...target,
+      }),
+    },
+    'Nigma human approval endpoint',
+  ));
+  const returnedEvidence = approval.evidence;
+  const responseAgrees = approval.plan_id === target.plan_id
+    && approval.plan_digest === target.plan_digest
+    && approval.agent_route_id === target.agent_route_id
+    && approval.agent_route_digest === target.agent_route_digest
+    && approval.plugin_selection_id === target.plugin_selection_id
+    && approval.plugin_selection_digest === target.plugin_selection_digest
+    && approval.provider_binding_id === target.provider_binding_id
+    && approval.provider_binding_digest === target.provider_binding_digest
+    && approval.approver === submission.approver
+    && Date.parse(approval.expires_at) === Date.parse(expiresAt)
+    && returnedEvidence.source_host_preparation_id === challenge.host_preparation_id
+    && returnedEvidence.source_interface_projection_id === challenge.interface_projection_id
+    && returnedEvidence.source_interface_projection_digest === challenge.interface_projection_digest
+    && returnedEvidence.approval_phrase_sha256 === phraseHash;
+  if (!responseAgrees) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_UPSTREAM_MISMATCH', 502,
+      'Nigma returned an approval that does not match the trusted human decision',
+    );
+  }
+  const provisional = {
+    protocol_version: 'nigma.trusted-human-approval-record/v1' as const,
+    approval_id: approval.id,
+    plan_id: approval.plan_id,
+    plan_digest: approval.plan_digest,
+    agent_route_id: approval.agent_route_id,
+    agent_route_digest: approval.agent_route_digest,
+    approver: approval.approver,
+    decision: 'approved' as const,
+    created_at: approval.created_at,
+    expires_at: approval.expires_at,
+    source_host_preparation_id: challenge.host_preparation_id,
+    source_interface_projection_id: challenge.interface_projection_id,
+    source_interface_projection_digest: challenge.interface_projection_digest,
+    approval_phrase_sha256: phraseHash,
+    authority: 'trusted_human_adapter' as const,
+    approval_recorded: true as const,
+    execution_performed: false as const,
+  };
+  return NigmaTrustedHumanApprovalResultSchema.parse({
+    ...provisional,
+    digest: sha256(canonicalJson(provisional)),
+  });
+}
+
 const NigmaRuntimeFallbackUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-runtime-fallback/v1'),
   id: BoundedId,
@@ -894,6 +1097,120 @@ async function writeHostRecord(core: NigmaHostRunRecordCore): Promise<NigmaHostR
   const result = hostRecordQueue.then(run, run);
   hostRecordQueue = result.then(() => undefined, () => undefined);
   return result;
+}
+
+let humanChallengeQueue: Promise<unknown> = Promise.resolve();
+
+function humanChallengeDirectory(): string {
+  return path.resolve(
+    process.env.LOCAL_DATA_DIR ?? '.ego-runtime', 'nigma-human-approval-challenges',
+  );
+}
+
+function humanChallengeFile(hostPreparationId: string): string {
+  if (!/^host-preparation-[a-f0-9]{32}$/.test(hostPreparationId)) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_PREPARATION_ID_INVALID', 400, 'Host preparation id is invalid',
+    );
+  }
+  return path.join(humanChallengeDirectory(), `${hostPreparationId}.json`);
+}
+
+function sealHumanChallenge(
+  core: z.infer<typeof NigmaHumanApprovalChallengeCoreSchema>,
+): NigmaHumanApprovalChallenge {
+  const parsed = NigmaHumanApprovalChallengeCoreSchema.parse(core);
+  return NigmaHumanApprovalChallengeSchema.parse({
+    ...parsed, record_digest: sha256(canonicalJson(parsed)),
+  });
+}
+
+async function readHumanChallengeOrNull(
+  hostPreparationId: string,
+): Promise<NigmaHumanApprovalChallenge | null> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(humanChallengeFile(hostPreparationId), 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_CHALLENGE_INVALID', 500,
+      'Human approval challenge is unreadable or invalid',
+    );
+  }
+  const parsed = NigmaHumanApprovalChallengeSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_CHALLENGE_INVALID', 500,
+      'Human approval challenge is invalid',
+    );
+  }
+  const { record_digest: storedDigest, ...core } = parsed.data;
+  if (sha256(canonicalJson(core)) !== storedDigest) {
+    throw new NigmaHostError(
+      'NIGMA_HUMAN_APPROVAL_CHALLENGE_INTEGRITY_FAILED', 500,
+      'Human approval challenge failed integrity validation',
+    );
+  }
+  return parsed.data;
+}
+
+async function persistHumanApprovalChallenge(
+  preparation: NigmaHostPreparationResult,
+): Promise<void> {
+  const projection = preparation.interface_projection;
+  if (!projection) return;
+  const run = async () => {
+    const existing = await readHumanChallengeOrNull(preparation.host_preparation_id);
+    const identity = {
+      interface_projection_id: projection.id,
+      interface_projection_digest: projection.digest,
+      approval_phrase_sha256: sha256(projection.approval_phrase),
+      approval_target: preparation.approval_target,
+    };
+    if (existing) {
+      const existingIdentity = {
+        interface_projection_id: existing.interface_projection_id,
+        interface_projection_digest: existing.interface_projection_digest,
+        approval_phrase_sha256: existing.approval_phrase_sha256,
+        approval_target: existing.approval_target,
+      };
+      if (canonicalJson(existingIdentity) !== canonicalJson(identity)) {
+        throw new NigmaHostError(
+          'NIGMA_HUMAN_APPROVAL_CHALLENGE_CONFLICT', 409,
+          'Host preparation id is already bound to another human decision challenge',
+        );
+      }
+      return;
+    }
+    const now = new Date();
+    const challenge = sealHumanChallenge({
+      protocol_version: 'nigma.human-approval-challenge/v1',
+      host_preparation_id: preparation.host_preparation_id,
+      ...identity,
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + 7_200_000).toISOString(),
+    });
+    const directory = humanChallengeDirectory();
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    await fs.chmod(directory, 0o700);
+    const file = humanChallengeFile(challenge.host_preparation_id);
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(challenge, null, 2), { mode: 0o600 });
+    await fs.chmod(temporary, 0o600);
+    await fs.rename(temporary, file);
+    await fs.chmod(file, 0o600);
+    if (((await fs.stat(file)).mode & 0o777) !== 0o600) {
+      await fs.unlink(file).catch(() => undefined);
+      throw new NigmaHostError(
+        'NIGMA_HUMAN_APPROVAL_STORAGE_UNSAFE', 500,
+        'Human approval challenge storage cannot enforce owner-only permissions',
+      );
+    }
+  };
+  const result = humanChallengeQueue.then(run, run);
+  humanChallengeQueue = result.then(() => undefined, () => undefined);
+  await result;
 }
 
 export async function getNigmaHostRunRecord(hostRunId: string): Promise<NigmaHostRunRecord> {
@@ -1117,7 +1434,7 @@ export async function prepareNigmaEducationalTask(
   const runtimeDecision = projectRuntimeDecision(
     prepared.runtime_explanation, runtime, presentationLocale,
   );
-  return NigmaHostPreparationResultSchema.parse({
+  const result = NigmaHostPreparationResultSchema.parse({
     protocol_version: 'nigma.host-preparation/v1',
     host_preparation_id: hostPreparationId,
     status: 'awaiting_human_approval',
@@ -1163,6 +1480,8 @@ export async function prepareNigmaEducationalTask(
       `agent_route_digest:${route.digest}`,
     ],
   });
+  await persistHumanApprovalChallenge(result);
+  return result;
 }
 
 function fallbackFailure(record: NigmaHostRunRecord): {
@@ -1338,6 +1657,7 @@ export async function prepareNigmaHostFallback(
       'Nigma fallback selected the failed runtime again',
     );
   }
+  await persistHumanApprovalChallenge(replacement);
   return NigmaHostFallbackPreparationSchema.parse({
     protocol_version: 'nigma.host-fallback-preparation/v1',
     host_run_id: hostRunId,

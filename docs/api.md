@@ -12,6 +12,7 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
 - `POST /nigma/educational-tasks/prepare` — obtain a verified pre-approval plan view as JSON, or its generic interface events with explicit `Accept: text/event-stream`.
+- `POST /nigma/human-approvals` — record an exact, separately authenticated human approval for a persisted sealed preparation; never execute it.
 - `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
 - `GET /nigma/host-runs/:host_run_id` — read a sealed durable host-run state and content-free artifact references.
 - `GET /nigma/host-runs/:host_run_id/events?after=N` — read ordered host events after a bounded cursor.
@@ -41,6 +42,23 @@ With `Accept: text/event-stream`, the endpoint emits exactly
 presentation only: the projection is `human_decision_required` and cannot
 record approval or execute. The locale is removed before the request reaches
 Nigma.
+
+## Trusted Nigma human approval
+
+`POST /nigma/human-approvals` requires both the normal runtime bearer token and
+`X-Nigma-Human-Decision-Token`. The latter must be configured through
+`NIGMA_HUMAN_DECISION_TOKEN`, contain at least 32 characters and differ from
+`INTERNAL_RUNTIME_TOKEN`. The request supplies the exact preparation/projection
+identities, exact displayed approval phrase, bounded approver, absolute
+`expires_at` and a stable `Idempotency-Key`.
+
+EGO verifies those values against its owner-only sealed challenge and forwards
+only the exact approval target plus phrase SHA-256 to Nigma. The challenge and
+approval each expire within two hours; approval must remain valid for at least
+one minute and cannot outlive the challenge. A successful response is
+`nigma.trusted-human-approval-record/v1` with `approval_recorded=true` and
+`execution_performed=false`. Execution remains a separate `/nigma/host-runs`
+request and Nigma independently revalidates the current approval.
 
 ## Runtime manifest
 
