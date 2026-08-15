@@ -19,6 +19,7 @@ import {
   getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
   prepareNigmaHostFallback,
+  renderNigmaHostPreparationSse,
   runApprovedNigmaPlan,
 } from '../../runtime/nigma_host';
 import { getRuntimeRepository } from '../../services/runtime_repository';
@@ -32,6 +33,18 @@ router.post('/educational-tasks/prepare', authMiddleware, async (req, res, next)
     const result = await prepareNigmaEducationalTask(
       request, req.header('Idempotency-Key') ?? '',
     );
+    const acceptsSse = (req.header('Accept') ?? '').split(',')
+      .some(value => value.trim().split(';', 1)[0].toLowerCase() === 'text/event-stream');
+    if (acceptsSse) {
+      const rendered = renderNigmaHostPreparationSse(result);
+      res.set({
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+        'X-Nigma-Projection-Digest': result.interface_projection?.digest ?? '',
+      });
+      return res.send(rendered);
+    }
     return res.json(result);
   } catch (error) {
     if (error instanceof NigmaHostError) {

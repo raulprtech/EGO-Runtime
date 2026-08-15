@@ -40,6 +40,24 @@ Fallback preparation keeps its body empty. A caller may set
 `X-Presentation-Locale: en-US`; omitting the header uses `es-MX`. Unsupported
 locales fail validation before Nigma is contacted.
 
+G1.7 adds `interface_projection` when the verified G1.6 presentation is
+available. Its own digest binds the exact preparation/presentation and three
+generic events: `tool.started`, `tool.completed` and `assistant.completed`.
+The final text includes the localized review plus the exact approval phrase but
+remains `human_decision_required`, `approval_recorded=false` and
+`execution_performed=false`.
+
+To receive the same sealed events as an SSE stream, explicitly add:
+
+```http
+Accept: text/event-stream
+```
+
+The server returns `X-Nigma-Projection-Digest` and does not treat a generic
+`*/*` request as SSE. Historical preparations without a verified explanation
+remain readable as JSON; an explicit SSE request for one fails with 406 instead
+of manufacturing presentation text.
+
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
 ```http

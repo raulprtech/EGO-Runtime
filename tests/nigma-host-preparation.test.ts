@@ -217,6 +217,19 @@ describe('Nigma educational host preparation', () => {
           execution_performed: false,
         },
       },
+      interface_projection: {
+        protocol_version: 'nigma.host-preparation-interface/v1',
+        interface: 'generic-sse',
+        locale: 'es-MX',
+        authority: 'human_decision_required',
+        approval_recorded: false,
+        execution_performed: false,
+        events: [
+          { event: 'tool.started', data: { tool_name: 'nigma.plan', status: 'started' } },
+          { event: 'tool.completed', data: { tool_name: 'nigma.plan', status: 'completed' } },
+          { event: 'assistant.completed', data: { completed: true } },
+        ],
+      },
       approval_target: {
         scope: 'execute',
         plan_id: 'plan-1',
@@ -237,6 +250,13 @@ describe('Nigma educational host preparation', () => {
     expect(presentationId).toBe(
       `host-runtime-decision-presentation-${presentationDigest.slice(0, 16)}`,
     );
+    const projection = result.interface_projection;
+    const { id: projectionId, digest: projectionDigest, ...projectionPayload } = projection;
+    expect(projectionDigest).toBe(sha256(canonicalJson(projectionPayload)));
+    expect(projectionId).toBe(`host-preparation-interface-${projectionDigest.slice(0, 16)}`);
+    expect(projection.source_host_preparation_id).toBe(result.host_preparation_id);
+    expect(projection.source_presentation_digest).toBe(presentation.digest);
+    expect(projection.events[2].data.content).toContain(projection.approval_phrase);
   });
 
   it('renders a separate deterministic English presentation', async () => {
@@ -285,6 +305,45 @@ describe('Nigma educational host preparation', () => {
     expect(result.runtime_decision.presentation.id).not.toBe(
       spanish.runtime_decision.presentation.id,
     );
+    expect(result.interface_projection.source_presentation_digest).toBe(
+      result.runtime_decision.presentation.digest,
+    );
+    expect(result.interface_projection.id).not.toBe(spanish.interface_projection.id);
+  });
+
+  it('renders the sealed preparation as generic SSE accepted by the ARIA parser contract', async () => {
+    const control = express();
+    control.use(express.json());
+    control.post('/educational-tasks/prepare', (_req, res) => res.json(nigmaPreparation()));
+    const runtime = await runtimeFor(control);
+    const requestHeaders = {
+      ...headers,
+      Accept: 'text/event-stream',
+      'Idempotency-Key': 'interface-sse-view',
+    };
+    const response = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers: requestHeaders, body: JSON.stringify(task('en-US')) },
+    );
+    const rendered = await response.text();
+    expect(response.status, rendered).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(response.headers.get('x-nigma-projection-digest')).toMatch(/^[a-f0-9]{64}$/);
+    const frames = rendered.trim().split('\n\n').map(frame => {
+      const [eventLine, dataLine] = frame.split('\n');
+      return {
+        event: eventLine.replace('event: ', ''),
+        data: JSON.parse(dataLine.replace('data: ', '')),
+      };
+    });
+    expect(frames.map(frame => frame.event)).toEqual([
+      'tool.started', 'tool.completed', 'assistant.completed',
+    ]);
+    expect(frames[0].data.tool_call_id).toBe(frames[1].data.tool_call_id);
+    expect(frames[1].data.tool_name).toBe('nigma.plan');
+    expect(frames[2].data.completed).toBe(true);
+    expect(frames[2].data.content).toContain('Advantages:');
+    expect(frames[2].data.content).toContain('Apruebo plan plan-1 digest');
   });
 
   it('accepts a historical preparation without the optional explanation', async () => {
@@ -298,9 +357,29 @@ describe('Nigma educational host preparation', () => {
       `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
       { method: 'POST', headers, body: JSON.stringify(task()) },
     );
-    const result = await response.json() as { runtime_decision?: unknown };
+    const result = await response.json() as {
+      runtime_decision?: unknown; interface_projection?: unknown;
+    };
     expect(response.status).toBe(200);
     expect(result.runtime_decision).toBeUndefined();
+    expect(result.interface_projection).toBeUndefined();
+
+    const sseResponse = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      {
+        method: 'POST',
+        headers: {
+          ...headers,
+          Accept: 'text/event-stream',
+          'Idempotency-Key': 'historical-sse-view',
+        },
+        body: JSON.stringify(task()),
+      },
+    );
+    expect(sseResponse.status).toBe(406);
+    await expect(sseResponse.json()).resolves.toMatchObject({
+      error: 'NIGMA_INTERFACE_PROJECTION_UNAVAILABLE',
+    });
   });
 
   it('requires auth and a bounded idempotency key before contacting Nigma', async () => {

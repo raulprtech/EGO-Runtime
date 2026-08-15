@@ -11,6 +11,7 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `GET /capabilities` — backward-compatible capability summary; new discovery clients should use `manifest`.
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
+- `POST /nigma/educational-tasks/prepare` — obtain a verified pre-approval plan view as JSON, or its generic interface events with explicit `Accept: text/event-stream`.
 - `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
 - `GET /nigma/host-runs/:host_run_id` — read a sealed durable host-run state and content-free artifact references.
 - `GET /nigma/host-runs/:host_run_id/events?after=N` — read ordered host events after a bounded cursor.
@@ -26,6 +27,20 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `GET /:request_id/events?cursor=N` — durable ordered events after a cursor.
 - `POST /:request_id/cancel` — cooperative cancellation.
 - `POST /:request_id/assess` — grade quiz responses and update mastery.
+
+## Nigma educational preparation
+
+`POST /nigma/educational-tasks/prepare` accepts objective, bounded local
+material references and an optional host-only `presentation_locale` (`es-MX`
+or `en-US`). JSON responses contain `nigma.host-preparation/v1`, the exact
+approval target, the verified runtime-decision presentation and the separately
+sealed `nigma.host-preparation-interface/v1` projection.
+
+With `Accept: text/event-stream`, the endpoint emits exactly
+`tool.started`, `tool.completed` and `assistant.completed`. These frames are
+presentation only: the projection is `human_decision_required` and cannot
+record approval or execute. The locale is removed before the request reaches
+Nigma.
 
 ## Runtime manifest
 

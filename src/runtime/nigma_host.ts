@@ -358,6 +358,58 @@ const RuntimeDecisionPresentationSchema = RuntimeDecisionPresentationCoreSchema.
   digest: Digest,
 }).strict();
 
+const PreparationInterfaceToolDataSchema = z.object({
+  tool_call_id: BoundedId,
+  tool_name: z.literal('nigma.plan'),
+  status: z.enum(['started', 'completed']),
+  message: z.string().min(1).max(500),
+  plan_id: BoundedId,
+  plan_digest: Digest,
+}).strict();
+
+const PreparationInterfaceStartedEventSchema = z.object({
+  event: z.literal('tool.started'),
+  data: PreparationInterfaceToolDataSchema.extend({ status: z.literal('started') }).strict(),
+}).strict();
+
+const PreparationInterfaceCompletedEventSchema = z.object({
+  event: z.literal('tool.completed'),
+  data: PreparationInterfaceToolDataSchema.extend({ status: z.literal('completed') }).strict(),
+}).strict();
+
+const PreparationInterfaceAssistantEventSchema = z.object({
+  event: z.literal('assistant.completed'),
+  data: z.object({
+    content: z.string().min(1).max(12_000),
+    completed: z.literal(true),
+    host_preparation_id: BoundedId,
+    plan_id: BoundedId,
+  }).strict(),
+}).strict();
+
+const PreparationInterfaceProjectionCoreSchema = z.object({
+  protocol_version: z.literal('nigma.host-preparation-interface/v1'),
+  interface: z.literal('generic-sse'),
+  source_host_preparation_id: BoundedId,
+  source_presentation_id: z.string().regex(/^host-runtime-decision-presentation-[a-f0-9]{16}$/),
+  source_presentation_digest: Digest,
+  locale: NigmaPresentationLocaleSchema,
+  approval_phrase: z.string().min(1).max(1000),
+  events: z.tuple([
+    PreparationInterfaceStartedEventSchema,
+    PreparationInterfaceCompletedEventSchema,
+    PreparationInterfaceAssistantEventSchema,
+  ]),
+  authority: z.literal('human_decision_required'),
+  approval_recorded: z.literal(false),
+  execution_performed: z.literal(false),
+}).strict();
+
+const PreparationInterfaceProjectionSchema = PreparationInterfaceProjectionCoreSchema.extend({
+  id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  digest: Digest,
+}).strict();
+
 const NigmaEducationalPreparationUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-task-preparation/v1'),
   status: z.literal('awaiting_human_approval'),
@@ -453,6 +505,7 @@ export const NigmaHostPreparationResultSchema = z.object({
     execution_performed: z.literal(false),
     presentation: RuntimeDecisionPresentationSchema,
   }).strict().optional(),
+  interface_projection: PreparationInterfaceProjectionSchema.optional(),
   approval_target: PreparationApprovalTargetSchema,
   resume: z.object({
     method: z.literal('POST'),
@@ -603,6 +656,121 @@ function projectRuntimeDecision(
     execution_performed: false,
     presentation: buildRuntimeDecisionPresentation(explanation, locale),
   };
+}
+
+function approvalPhrase(approval: z.infer<typeof PreparationApprovalTargetSchema>): string {
+  return `Apruebo plan ${approval.plan_id} digest ${approval.plan_digest}, ruta ${approval.agent_route_id} digest ${approval.agent_route_digest}, alcance execute.`;
+}
+
+function buildPreparationInterfaceProjection(
+  hostPreparationId: string,
+  objective: string,
+  plan: { id: string; digest: string; confidence: number; risk_level: string },
+  decision: NonNullable<NigmaHostPreparationResult['runtime_decision']>,
+  approval: z.infer<typeof PreparationApprovalTargetSchema>,
+): z.infer<typeof PreparationInterfaceProjectionSchema> {
+  const presentation = decision.presentation;
+  const locale = presentation.locale;
+  const exactPhrase = approvalPhrase(approval);
+  const advantages = presentation.advantages.length
+    ? presentation.advantages.map(item => `- ${item.text}`).join('\n')
+    : (locale === 'es-MX' ? '- Ninguna ventaja diferencial registrada.' : '- No differential advantage recorded.');
+  const tradeoffs = presentation.tradeoffs.length
+    ? presentation.tradeoffs.map(item => `- ${item.text}`).join('\n')
+    : (locale === 'es-MX' ? '- Ningún compromiso diferencial registrado.' : '- No differential tradeoff recorded.');
+  const reasons = presentation.reason_texts.map(item => `- ${item}`).join('\n');
+  const confidence = localizedNumber(plan.confidence * 100, locale);
+  const content = locale === 'es-MX'
+    ? [
+      presentation.title,
+      presentation.summary,
+      `Objetivo: ${objective}`,
+      `Riesgo: ${plan.risk_level}. Confianza: ${confidence}%.`,
+      `Ventajas:\n${advantages}`,
+      `Compromisos:\n${tradeoffs}`,
+      `Motivos:\n${reasons}`,
+      'Para autorizar la ejecución, responde exactamente:',
+      exactPhrase,
+      presentation.disclaimer,
+    ].join('\n\n')
+    : [
+      presentation.title,
+      presentation.summary,
+      `Objective: ${objective}`,
+      `Risk: ${plan.risk_level}. Confidence: ${confidence}%.`,
+      `Advantages:\n${advantages}`,
+      `Tradeoffs:\n${tradeoffs}`,
+      `Reasons:\n${reasons}`,
+      'To authorize execution, reply with this exact phrase:',
+      exactPhrase,
+      presentation.disclaimer,
+    ].join('\n\n');
+  const provisional = PreparationInterfaceProjectionCoreSchema.parse({
+    protocol_version: 'nigma.host-preparation-interface/v1',
+    interface: 'generic-sse',
+    source_host_preparation_id: hostPreparationId,
+    source_presentation_id: presentation.id,
+    source_presentation_digest: presentation.digest,
+    locale,
+    approval_phrase: exactPhrase,
+    events: [
+      {
+        event: 'tool.started',
+        data: {
+          tool_call_id: hostPreparationId,
+          tool_name: 'nigma.plan',
+          status: 'started',
+          message: locale === 'es-MX'
+            ? 'Nigma está verificando el plan y la ruta.'
+            : 'Nigma is verifying the plan and route.',
+          plan_id: plan.id,
+          plan_digest: plan.digest,
+        },
+      },
+      {
+        event: 'tool.completed',
+        data: {
+          tool_call_id: hostPreparationId,
+          tool_name: 'nigma.plan',
+          status: 'completed',
+          message: presentation.title,
+          plan_id: plan.id,
+          plan_digest: plan.digest,
+        },
+      },
+      {
+        event: 'assistant.completed',
+        data: { content, completed: true, host_preparation_id: hostPreparationId, plan_id: plan.id },
+      },
+    ],
+    authority: 'human_decision_required',
+    approval_recorded: false,
+    execution_performed: false,
+  });
+  const digest = sha256(canonicalJson(provisional));
+  return PreparationInterfaceProjectionSchema.parse({
+    ...provisional,
+    id: `host-preparation-interface-${digest.slice(0, 16)}`,
+    digest,
+  });
+}
+
+export function renderNigmaHostPreparationSse(result: NigmaHostPreparationResult): string {
+  const projection = result.interface_projection;
+  if (!projection) {
+    throw new NigmaHostError(
+      'NIGMA_INTERFACE_PROJECTION_UNAVAILABLE', 406,
+      'This historical preparation has no verified runtime-decision presentation',
+    );
+  }
+  type PreparationInterfaceEvent =
+    | z.infer<typeof PreparationInterfaceStartedEventSchema>
+    | z.infer<typeof PreparationInterfaceCompletedEventSchema>
+    | z.infer<typeof PreparationInterfaceAssistantEventSchema>;
+  const events = projection.events as PreparationInterfaceEvent[];
+  return `${events.map(item => (
+    `event: ${item.event}\ndata: ${JSON.stringify(item.data)}\n`
+  )).join('\n')}\n`;
 }
 
 const NigmaRuntimeFallbackUpstreamSchema = z.object({
@@ -946,6 +1114,9 @@ export async function prepareNigmaEducationalTask(
   const hostPreparationId = `host-preparation-${createHash('sha256')
     .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}:${presentationLocale}`)
     .digest('hex').slice(0, 32)}`;
+  const runtimeDecision = projectRuntimeDecision(
+    prepared.runtime_explanation, runtime, presentationLocale,
+  );
   return NigmaHostPreparationResultSchema.parse({
     protocol_version: 'nigma.host-preparation/v1',
     host_preparation_id: hostPreparationId,
@@ -963,9 +1134,19 @@ export async function prepareNigmaEducationalTask(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
-    runtime_decision: projectRuntimeDecision(
-      prepared.runtime_explanation, runtime, presentationLocale,
-    ),
+    runtime_decision: runtimeDecision,
+    interface_projection: runtimeDecision
+      ? buildPreparationInterfaceProjection(
+        hostPreparationId,
+        nigmaRequest.objective,
+        {
+          id: plan.id, digest: plan.digest,
+          confidence: plan.confidence, risk_level: plan.risk_level,
+        },
+        runtimeDecision,
+        approval,
+      )
+      : undefined,
     approval_target: approval,
     resume: {
       method: 'POST',
@@ -1067,6 +1248,11 @@ function projectFallbackPreparation(
   const hostPreparationId = `host-preparation-${createHash('sha256')
     .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}:${locale}`)
     .digest('hex').slice(0, 32)}`;
+  const runtimeDecision = projectRuntimeDecision(
+    prepared.runtime_explanation,
+    runtime,
+    locale,
+  );
   return NigmaHostPreparationResultSchema.parse({
     protocol_version: 'nigma.host-preparation/v1',
     host_preparation_id: hostPreparationId,
@@ -1081,11 +1267,19 @@ function projectFallbackPreparation(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
-    runtime_decision: projectRuntimeDecision(
-      prepared.runtime_explanation,
-      runtime,
-      locale,
-    ),
+    runtime_decision: runtimeDecision,
+    interface_projection: runtimeDecision
+      ? buildPreparationInterfaceProjection(
+        hostPreparationId,
+        prepared.capability_request.objective,
+        {
+          id: plan.id, digest: plan.digest,
+          confidence: plan.confidence, risk_level: plan.risk_level,
+        },
+        runtimeDecision,
+        approval,
+      )
+      : undefined,
     approval_target: approval,
     resume: { method: 'POST', path: '/v1/runtime/nigma/host-runs', plan_id: plan.id },
     approval_granted: false,
