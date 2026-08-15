@@ -73,12 +73,42 @@ NIGMA_RUNTIME_TOKEN_EGO=<host-to-runtime-secret>
 
 ## Neutral progress result
 
-EGO 0.9 returns `protocol_version=nigma.host-run-result/v1`, a stable
-`host_run_id` and the ordered `nigma.host-event/v1` lifecycle:
+EGO returns `protocol_version=nigma.host-run-result/v1`, a stable `host_run_id`
+and the ordered `nigma.host-event/v1` lifecycle:
 
 `request_received → invocation_authorized → runtime_routed → runtime_accepted → runtime_terminal → receipt_observed → receipt_recorded → run_completed`.
 
-Every later event repeats the exact sealed links already known at that stage.
+Every event is now written atomically before the next external transition. The
+host record uses `nigma.host-run-record/v1`, is sealed by `record_digest` and is
+stored at `LOCAL_DATA_DIR/nigma-host-runs/<host_run_id>.json` with owner-only
+directory/file permissions. It contains only plan and integrity identities,
+bounded lifecycle evidence, content-free artifact references and a sanitized
+failure code/message. It never stores the idempotency key, learner identifiers,
+runtime credentials, control-plane credentials or educational content.
+
+Authenticated readers can recover terminal or partial progress after an EGO
+restart:
+
+```http
+GET /v1/runtime/nigma/host-runs/<host_run_id>
+Authorization: Bearer <host-runtime-token>
+```
+
+Incremental consumers can request only events after a previously observed
+sequence:
+
+```http
+GET /v1/runtime/nigma/host-runs/<host_run_id>/events?after=4
+Authorization: Bearer <host-runtime-token>
+```
+
+The response uses `nigma.host-event-page/v1` and includes `next_cursor`, current
+status and the record digest. Invalid IDs, path-like IDs, invalid cursors,
+schema corruption and digest mismatches fail closed. Reusing one host
+idempotency identity with changed learner routing context also fails before any
+upstream call. Exact retry retains the existing Nigma/EGO idempotent transport,
+appends a new numbered attempt and never overwrites prior evidence.
+
 Runtime replay marks `runtime_accepted.replayed=true`. Events contain no URL,
 credential or environment-variable name. Nigma's independent offline verifier
 and JSON-stdio fixture define the replaceable boundary; EGO is only its first
@@ -86,4 +116,9 @@ live implementation.
 
 ## Current limitation
 
-The reference endpoint is synchronous and intended for local integration. Successful progress is returned with the final response; partial failure traces are not durable yet. A production or long-running host should persist host-run state and expose asynchronous status/events. Remote deployment also requires platform service authentication or a signed-envelope protocol; SHA-256 alone authenticates no sender.
+The execution request remains synchronous and intended for local integration;
+durable records make it observable and auditable but do not yet provide a
+restartable distributed scheduler. A process loss during an active transition
+requires an exact idempotent retry. Remote deployment also requires platform
+service authentication or a signed-envelope protocol; SHA-256 alone
+authenticates no sender.

@@ -143,7 +143,8 @@ describe('Nigma host feedback loop', () => {
       method: 'POST', headers, body: JSON.stringify(body),
     });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const result = await response.json() as { host_run_id: string };
+    expect(result).toMatchObject({
       protocol_version: 'nigma.host-run-result/v1',
       plan_id: invocation.plan_id,
       invocation_id: invocation.id,
@@ -187,6 +188,61 @@ describe('Nigma host feedback loop', () => {
     expect(invocationRequests).toBe(2);
     expect(receipts).toHaveLength(2);
     expect(receipts[1]).toEqual(receipts[0]);
+
+    const stateResponse = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/host-runs/${result.host_run_id}`, { headers },
+    );
+    expect(stateResponse.status).toBe(200);
+    const stateText = await stateResponse.text();
+    expect(stateText).not.toContain('runtime-test-token');
+    expect(stateText).not.toContain('control-test-key');
+    expect(stateText).not.toContain('learner_1');
+    expect(JSON.parse(stateText)).toMatchObject({
+      protocol_version: 'nigma.host-run-record/v1',
+      host_run_id: result.host_run_id,
+      status: 'succeeded',
+      request_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      idempotency_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      record_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      artifact_refs: expect.arrayContaining([
+        expect.objectContaining({ uri: expect.stringContaining('study_plan.json') }),
+      ]),
+    });
+
+    await closers.pop()?.();
+    const restarted = await listen(await createApp());
+    closers.push(restarted.close);
+    const eventsResponse = await fetch(
+      `${restarted.baseUrl}/v1/runtime/nigma/host-runs/${result.host_run_id}/events?after=12`,
+      { headers },
+    );
+    expect(eventsResponse.status).toBe(200);
+    await expect(eventsResponse.json()).resolves.toMatchObject({
+      protocol_version: 'nigma.host-event-page/v1',
+      host_run_id: result.host_run_id,
+      status: 'succeeded',
+      after: 12,
+      next_cursor: 16,
+      events: [
+        { sequence: 13, attempt: 2, kind: 'runtime_terminal' },
+        { sequence: 14, attempt: 2, kind: 'receipt_observed' },
+        { sequence: 15, attempt: 2, kind: 'receipt_recorded' },
+        { sequence: 16, attempt: 2, kind: 'run_completed' },
+      ],
+    });
+
+    const conflict = await fetch(`${restarted.baseUrl}/v1/runtime/nigma/host-runs`, {
+      method: 'POST', headers, body: JSON.stringify({
+        ...body,
+        learner_context: { ...body.learner_context, user_id: 'different-learner' },
+      }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({
+      error: 'NIGMA_HOST_IDEMPOTENCY_CONFLICT',
+    });
+    expect(invocationRequests).toBe(2);
+    expect(receipts).toHaveLength(2);
   });
 
   it('cannot proceed when Nigma has not issued an approved invocation', async () => {
@@ -197,6 +253,9 @@ describe('Nigma host feedback loop', () => {
     });
     const controlServer = await listen(control);
     closers.push(controlServer.close);
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ego-nigma-denied-'));
+    process.env.LOCAL_DATA_DIR = path.join(directory, 'data');
+    process.env.RUNTIME_BACKEND = 'local';
     process.env.INTERNAL_RUNTIME_TOKEN = 'runtime-test-token';
     process.env.NIGMA_CONTROL_PLANE_URL = controlServer.baseUrl;
     process.env.NIGMA_CONTROL_PLANE_API_KEY = 'control-test-key';
@@ -220,5 +279,52 @@ describe('Nigma host feedback loop', () => {
       error: 'NIGMA_HOST_UPSTREAM_REJECTED',
       message: expect.stringContaining('approval_required'),
     });
+
+    const files = await fs.readdir(path.join(directory, 'data', 'nigma-host-runs'));
+    expect(files).toHaveLength(1);
+    const hostRunId = files[0].replace(/\.json$/, '');
+    const persisted = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/host-runs/${hostRunId}`,
+      { headers: { Authorization: 'Bearer runtime-test-token' } },
+    );
+    expect(persisted.status).toBe(200);
+    await expect(persisted.json()).resolves.toMatchObject({
+      status: 'error',
+      events: [{ sequence: 1, kind: 'request_received' }],
+      artifact_refs: [],
+      error: {
+        code: 'NIGMA_HOST_UPSTREAM_REJECTED',
+        message: expect.stringContaining('approval_required'),
+      },
+    });
+
+    const invalidCursor = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/host-runs/${hostRunId}/events?after=-1`,
+      { headers: { Authorization: 'Bearer runtime-test-token' } },
+    );
+    expect(invalidCursor.status).toBe(400);
+    await expect(invalidCursor.json()).resolves.toMatchObject({
+      error: 'NIGMA_HOST_EVENT_CURSOR_INVALID',
+    });
+
+    const recordFile = path.join(directory, 'data', 'nigma-host-runs', files[0]);
+    const corrupted = JSON.parse(await fs.readFile(recordFile, 'utf8')) as Record<string, unknown>;
+    corrupted.status = 'succeeded';
+    await fs.writeFile(recordFile, JSON.stringify(corrupted), { mode: 0o600 });
+    const corruptResponse = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/host-runs/${hostRunId}`,
+      { headers: { Authorization: 'Bearer runtime-test-token' } },
+    );
+    expect(corruptResponse.status).toBe(500);
+    await expect(corruptResponse.json()).resolves.toMatchObject({
+      error: 'NIGMA_HOST_RECORD_INTEGRITY_FAILED',
+    });
+
+    const traversal = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/host-runs/not-a-host-id`,
+      { headers: { Authorization: 'Bearer runtime-test-token' } },
+    );
+    expect(traversal.status).toBe(400);
+    await expect(traversal.json()).resolves.toMatchObject({ error: 'NIGMA_HOST_RUN_ID_INVALID' });
   });
 });

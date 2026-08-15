@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import {
   NigmaInvocationEnvelopeSchema,
@@ -191,6 +192,40 @@ export const NigmaHostRunResultSchema = z.object({
 }).strict();
 export type NigmaHostRunResult = z.infer<typeof NigmaHostRunResultSchema>;
 
+const NigmaHostRunRecordCoreSchema = z.object({
+  protocol_version: z.literal('nigma.host-run-record/v1'),
+  host_run_id: z.string().regex(/^host-[a-f0-9]{32}$/),
+  plan_id: BoundedId,
+  request_digest: Digest,
+  idempotency_digest: Digest,
+  status: z.enum(['running', 'succeeded', 'failed', 'cancelled', 'timed_out', 'error']),
+  created_at: z.iso.datetime(),
+  updated_at: z.iso.datetime(),
+  events: z.array(NigmaHostEventSchema).max(10_000),
+  artifact_refs: z.array(ArtifactRefSchema).max(500),
+  result: NigmaHostRunResultSchema.optional(),
+  error: z.object({
+    code: z.string().regex(/^[A-Z0-9_]+$/).max(200),
+    message: z.string().min(1).max(1000),
+  }).strict().optional(),
+}).strict();
+
+export const NigmaHostRunRecordSchema = NigmaHostRunRecordCoreSchema.extend({
+  record_digest: Digest,
+}).strict();
+export type NigmaHostRunRecord = z.infer<typeof NigmaHostRunRecordSchema>;
+
+export const NigmaHostEventPageSchema = z.object({
+  protocol_version: z.literal('nigma.host-event-page/v1'),
+  host_run_id: z.string().regex(/^host-[a-f0-9]{32}$/),
+  status: NigmaHostRunRecordCoreSchema.shape.status,
+  after: z.number().int().min(0).max(10_000),
+  next_cursor: z.number().int().min(0).max(10_000),
+  events: z.array(NigmaHostEventSchema).max(10_000),
+  record_digest: Digest,
+}).strict();
+export type NigmaHostEventPage = z.infer<typeof NigmaHostEventPageSchema>;
+
 const PreparationApprovalTargetSchema = z.object({
   scope: z.literal('execute'),
   plan_id: BoundedId,
@@ -292,6 +327,97 @@ export class NigmaHostError extends Error {
   constructor(readonly code: string, readonly status: number, message: string) {
     super(message);
   }
+}
+
+type NigmaHostRunRecordCore = z.infer<typeof NigmaHostRunRecordCoreSchema>;
+
+let hostRecordQueue: Promise<unknown> = Promise.resolve();
+
+function hostRecordDirectory(): string {
+  return path.resolve(process.env.LOCAL_DATA_DIR ?? '.ego-runtime', 'nigma-host-runs');
+}
+
+function hostRecordFile(hostRunId: string): string {
+  if (!/^host-[a-f0-9]{32}$/.test(hostRunId)) {
+    throw new NigmaHostError('NIGMA_HOST_RUN_ID_INVALID', 400, 'Host run id is invalid');
+  }
+  return path.join(hostRecordDirectory(), `${hostRunId}.json`);
+}
+
+function digestValue(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function sealedHostRecord(core: NigmaHostRunRecordCore): NigmaHostRunRecord {
+  const parsed = NigmaHostRunRecordCoreSchema.parse(core);
+  return NigmaHostRunRecordSchema.parse({ ...parsed, record_digest: digestValue(parsed) });
+}
+
+async function readHostRecordOrNull(hostRunId: string): Promise<NigmaHostRunRecord | null> {
+  const file = hostRecordFile(hostRunId);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new NigmaHostError(
+      'NIGMA_HOST_RECORD_INVALID', 500, 'Host run record is unreadable or invalid',
+    );
+  }
+  const parsed = NigmaHostRunRecordSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new NigmaHostError('NIGMA_HOST_RECORD_INVALID', 500, 'Host run record is invalid');
+  }
+  const { record_digest: storedDigest, ...coreValue } = parsed.data;
+  const core = NigmaHostRunRecordCoreSchema.parse(coreValue);
+  if (digestValue(core) !== storedDigest) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_RECORD_INTEGRITY_FAILED', 500, 'Host run record failed integrity validation',
+    );
+  }
+  return parsed.data;
+}
+
+async function writeHostRecord(core: NigmaHostRunRecordCore): Promise<NigmaHostRunRecord> {
+  const run = async () => {
+    const record = sealedHostRecord(core);
+    const directory = hostRecordDirectory();
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    await fs.chmod(directory, 0o700);
+    const file = hostRecordFile(record.host_run_id);
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(record, null, 2), { mode: 0o600 });
+    await fs.rename(temporary, file);
+    return record;
+  };
+  const result = hostRecordQueue.then(run, run);
+  hostRecordQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+export async function getNigmaHostRunRecord(hostRunId: string): Promise<NigmaHostRunRecord> {
+  const record = await readHostRecordOrNull(hostRunId);
+  if (!record) throw new NigmaHostError('NIGMA_HOST_RUN_NOT_FOUND', 404, 'Host run was not found');
+  return record;
+}
+
+export async function getNigmaHostRunEvents(
+  hostRunId: string, after: number,
+): Promise<NigmaHostEventPage> {
+  if (!Number.isInteger(after) || after < 0 || after > 10_000) {
+    throw new NigmaHostError('NIGMA_HOST_EVENT_CURSOR_INVALID', 400, 'Event cursor is invalid');
+  }
+  const record = await getNigmaHostRunRecord(hostRunId);
+  const events = record.events.filter(event => event.sequence > after);
+  return NigmaHostEventPageSchema.parse({
+    protocol_version: 'nigma.host-event-page/v1',
+    host_run_id: hostRunId,
+    status: record.status,
+    after,
+    next_cursor: events.at(-1)?.sequence ?? after,
+    events,
+    record_digest: record.record_digest,
+  });
 }
 
 let routesOverride: NigmaHostRoutes | undefined;
@@ -520,6 +646,185 @@ export async function prepareNigmaEducationalTask(
     ],
   });
 }
+const activeHostRuns = new Map<string, {
+  requestDigest: string;
+  promise: Promise<NigmaHostRunResult>;
+}>();
+
+async function executeApprovedNigmaPlan(
+  request: NigmaHostRunRequest, idempotencyKey: string, hostRunId: string,
+  requestDigest: string, idempotencyDigest: string,
+): Promise<NigmaHostRunResult> {
+  const now = new Date().toISOString();
+  const existing = await readHostRecordOrNull(hostRunId);
+  if (existing && (existing.plan_id !== request.plan_id
+      || existing.request_digest !== requestDigest
+      || existing.idempotency_digest !== idempotencyDigest)) {
+    throw new NigmaHostError(
+      'NIGMA_HOST_IDEMPOTENCY_CONFLICT', 409,
+      'Idempotency key is already bound to a different host request',
+    );
+  }
+  const priorEvents = existing?.events ?? [];
+  const attempt = (priorEvents.at(-1)?.attempt ?? 0) + 1;
+  let record: NigmaHostRunRecordCore = NigmaHostRunRecordCoreSchema.parse({
+    protocol_version: 'nigma.host-run-record/v1',
+    host_run_id: hostRunId,
+    plan_id: request.plan_id,
+    request_digest: requestDigest,
+    idempotency_digest: idempotencyDigest,
+    status: 'running',
+    created_at: existing?.created_at ?? now,
+    updated_at: now,
+    events: priorEvents,
+    artifact_refs: [],
+  });
+  const persist = async () => {
+    record.updated_at = new Date().toISOString();
+    await writeHostRecord(record);
+  };
+  const emitEvent = async (
+    kind: z.infer<typeof HostEventKindSchema>, links: Partial<NigmaHostEvent> = {},
+  ) => {
+    record.events.push(NigmaHostEventSchema.parse({
+      protocol_version: 'nigma.host-event/v1', host_run_id: hostRunId,
+      plan_id: request.plan_id, sequence: record.events.length + 1, kind,
+      occurred_at: new Date().toISOString(), attempt, replayed: false, evidence: [], ...links,
+    }));
+    await persist();
+  };
+
+  await emitEvent('request_received');
+  try {
+    const control = controlPlaneConfig();
+    const invocation = parseUpstream(NigmaInvocationEnvelopeSchema, await requestJson(
+      `${control.baseUrl}/integration-plans/${encodeURIComponent(request.plan_id)}/runtime-invocations`,
+      {
+        method: 'POST',
+        headers: { 'X-API-Key': control.apiKey, 'Idempotency-Key': idempotencyKey },
+      },
+      'Nigma invocation endpoint',
+    ));
+    if (invocation.plan_id !== request.plan_id) {
+      throw new NigmaHostError('NIGMA_HOST_PLAN_MISMATCH', 409, 'Nigma returned another plan');
+    }
+    const invocationLinks = { invocation_id: invocation.id, invocation_digest: invocation.digest };
+    await emitEvent('invocation_authorized', invocationLinks);
+    const route = runtimeRoute(invocation, await loadRoutes());
+    const runtimeLinks = {
+      ...invocationLinks, runtime_id: invocation.runtime_id, runtime_version: invocation.runtime_version,
+    };
+    await emitEvent('runtime_routed', runtimeLinks);
+    const submission = parseUpstream(RuntimeSubmissionResponseSchema, await requestJson(
+      `${route.baseUrl}/nigma/invocations`,
+      {
+        method: 'POST', headers: authHeaders(route.credential),
+        body: JSON.stringify({ invocation, learner_context: request.learner_context }),
+      },
+      'Selected runtime invocation endpoint',
+    ));
+    if (submission.invocation_id !== invocation.id
+        || submission.invocation_digest !== invocation.digest
+        || submission.runtime_run_id !== invocation.id) {
+      throw new NigmaHostError(
+        'NIGMA_RUNTIME_SUBMISSION_MISMATCH', 409, 'Runtime submission response changed sealed links',
+      );
+    }
+    const submissionLinks = { ...runtimeLinks, runtime_run_id: submission.runtime_run_id };
+    await emitEvent('runtime_accepted', {
+      ...submissionLinks, replayed: submission.status === 'already_accepted',
+    });
+
+    const deadline = Date.now() + Math.min(boundedTimeout(), invocation.max_duration_seconds * 1_000);
+    let terminal = false;
+    while (Date.now() < deadline) {
+      const job = parseUpstream(RuntimeJobSchema, await requestJson(
+        `${route.baseUrl}/${encodeURIComponent(submission.runtime_run_id)}`,
+        { headers: authHeaders(route.credential) },
+        'Selected runtime status endpoint',
+      ));
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+        terminal = true;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, pollInterval()));
+    }
+    if (!terminal) {
+      throw new NigmaHostError(
+        'NIGMA_RUNTIME_WAIT_TIMEOUT', 504, 'Selected runtime did not finish in time',
+      );
+    }
+    await emitEvent('runtime_terminal', submissionLinks);
+
+    const receipt = parseUpstream(NigmaReceiptPayloadSchema, await requestJson(
+      `${route.baseUrl}/nigma/${encodeURIComponent(invocation.id)}/receipt`,
+      { headers: authHeaders(route.credential) },
+      'Selected runtime receipt endpoint',
+    ));
+    if (receipt.invocation_id !== invocation.id || receipt.invocation_digest !== invocation.digest) {
+      throw new NigmaHostError(
+        'NIGMA_RUNTIME_RECEIPT_MISMATCH', 409, 'Runtime receipt changed sealed links',
+      );
+    }
+    const references = [
+      ...receipt.artifacts, ...receipt.event_refs, ...receipt.assessment_refs,
+      ...receipt.mastery_refs, ...(receipt.cancellation_ref ? [receipt.cancellation_ref] : []),
+    ];
+    record.artifact_refs = [...new Map(references.map(reference => [
+      `${reference.uri}\u0000${reference.sha256}`, reference,
+    ])).values()];
+    await emitEvent('receipt_observed', { ...submissionLinks, status: receipt.status });
+    const accepted = parseUpstream(AcceptedReceiptSchema, await requestJson(
+      `${control.baseUrl}/runtime-invocations/${encodeURIComponent(invocation.id)}/receipts`,
+      {
+        method: 'POST', headers: { 'X-API-Key': control.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(receipt),
+      },
+      'Nigma receipt endpoint',
+    ));
+    if (accepted.invocation_id !== invocation.id || accepted.status !== receipt.status) {
+      throw new NigmaHostError(
+        'NIGMA_RECEIPT_ACCEPTANCE_MISMATCH', 409, 'Nigma accepted different links',
+      );
+    }
+    const receiptLinks = {
+      ...submissionLinks, receipt_id: accepted.id, receipt_digest: accepted.digest,
+    };
+    await emitEvent('receipt_recorded', receiptLinks);
+    await emitEvent('run_completed', { ...receiptLinks, status: accepted.status });
+    const result = NigmaHostRunResultSchema.parse({
+      protocol_version: 'nigma.host-run-result/v1',
+      host_run_id: hostRunId,
+      plan_id: request.plan_id,
+      invocation_id: invocation.id,
+      invocation_digest: invocation.digest,
+      runtime_id: invocation.runtime_id,
+      runtime_version: invocation.runtime_version,
+      runtime_run_id: submission.runtime_run_id,
+      runtime_submission_status: submission.status,
+      receipt_id: accepted.id,
+      receipt_digest: accepted.digest,
+      status: accepted.status,
+      events: record.events,
+    });
+    record.status = accepted.status;
+    record.result = result;
+    delete record.error;
+    await persist();
+    return result;
+  } catch (error) {
+    const hostError = error instanceof NigmaHostError ? error : undefined;
+    record.status = hostError?.code === 'NIGMA_RUNTIME_WAIT_TIMEOUT' ? 'timed_out' : 'error';
+    record.error = {
+      code: hostError?.code ?? 'NIGMA_HOST_INTERNAL_ERROR',
+      message: hostError?.message ?? 'Host execution failed unexpectedly',
+    };
+    delete record.result;
+    await persist();
+    throw error;
+  }
+}
+
 export async function runApprovedNigmaPlan(
   request: NigmaHostRunRequest,
   idempotencyKey: string,
@@ -531,109 +836,25 @@ export async function runApprovedNigmaPlan(
   }
   const hostRunId = `host-${createHash('sha256')
     .update(`${request.plan_id}:${idempotencyKey}`).digest('hex').slice(0, 32)}`;
-  const events: NigmaHostEvent[] = [];
-  const emitEvent = (kind: z.infer<typeof HostEventKindSchema>, links: Partial<NigmaHostEvent> = {}) => {
-    events.push(NigmaHostEventSchema.parse({
-      protocol_version: 'nigma.host-event/v1', host_run_id: hostRunId,
-      plan_id: request.plan_id, sequence: events.length + 1, kind,
-      occurred_at: new Date().toISOString(), attempt: 1, replayed: false, evidence: [], ...links,
-    }));
-  };
-  emitEvent('request_received');
-  const control = controlPlaneConfig();
-  const invocation = parseUpstream(NigmaInvocationEnvelopeSchema, await requestJson(
-    `${control.baseUrl}/integration-plans/${encodeURIComponent(request.plan_id)}/runtime-invocations`,
-    {
-      method: 'POST',
-      headers: { 'X-API-Key': control.apiKey, 'Idempotency-Key': idempotencyKey },
-    },
-    'Nigma invocation endpoint',
-  ));
-  if (invocation.plan_id !== request.plan_id) {
-    throw new NigmaHostError('NIGMA_HOST_PLAN_MISMATCH', 409, 'Nigma returned another plan');
-  }
-  const invocationLinks = { invocation_id: invocation.id, invocation_digest: invocation.digest };
-  emitEvent('invocation_authorized', invocationLinks);
-  const route = runtimeRoute(invocation, await loadRoutes());
-  const runtimeLinks = {
-    ...invocationLinks, runtime_id: invocation.runtime_id, runtime_version: invocation.runtime_version,
-  };
-  emitEvent('runtime_routed', runtimeLinks);
-  const submission = parseUpstream(RuntimeSubmissionResponseSchema, await requestJson(
-    `${route.baseUrl}/nigma/invocations`,
-    {
-      method: 'POST', headers: authHeaders(route.credential),
-      body: JSON.stringify({ invocation, learner_context: request.learner_context }),
-    },
-    'Selected runtime invocation endpoint',
-  ));
-  if (submission.invocation_id !== invocation.id
-      || submission.invocation_digest !== invocation.digest
-      || submission.runtime_run_id !== invocation.id) {
-    throw new NigmaHostError(
-      'NIGMA_RUNTIME_SUBMISSION_MISMATCH', 409, 'Runtime submission response changed sealed links',
-    );
-  }
-  const submissionLinks = { ...runtimeLinks, runtime_run_id: submission.runtime_run_id };
-  emitEvent('runtime_accepted', { ...submissionLinks, replayed: submission.status === 'already_accepted' });
-
-  const deadline = Date.now() + Math.min(boundedTimeout(), invocation.max_duration_seconds * 1_000);
-  let terminal = false;
-  while (Date.now() < deadline) {
-    const job = parseUpstream(RuntimeJobSchema, await requestJson(
-      `${route.baseUrl}/${encodeURIComponent(submission.runtime_run_id)}`,
-      { headers: authHeaders(route.credential) },
-      'Selected runtime status endpoint',
-    ));
-    if (['completed', 'failed', 'cancelled'].includes(job.status)) {
-      terminal = true;
-      break;
+  const requestDigest = digestValue(NigmaHostRunRequestSchema.parse(request));
+  const idempotencyDigest = digestValue(idempotencyKey);
+  const active = activeHostRuns.get(hostRunId);
+  if (active) {
+    if (active.requestDigest !== requestDigest) {
+      throw new NigmaHostError(
+        'NIGMA_HOST_IDEMPOTENCY_CONFLICT', 409,
+        'Idempotency key is already bound to a different host request',
+      );
     }
-    await new Promise(resolve => setTimeout(resolve, pollInterval()));
+    return active.promise;
   }
-  if (!terminal) {
-    throw new NigmaHostError('NIGMA_RUNTIME_WAIT_TIMEOUT', 504, 'Selected runtime did not finish in time');
+  const promise = executeApprovedNigmaPlan(
+    request, idempotencyKey, hostRunId, requestDigest, idempotencyDigest,
+  );
+  activeHostRuns.set(hostRunId, { requestDigest, promise });
+  try {
+    return await promise;
+  } finally {
+    if (activeHostRuns.get(hostRunId)?.promise === promise) activeHostRuns.delete(hostRunId);
   }
-  emitEvent('runtime_terminal', submissionLinks);
-
-  const receipt = parseUpstream(NigmaReceiptPayloadSchema, await requestJson(
-    `${route.baseUrl}/nigma/${encodeURIComponent(invocation.id)}/receipt`,
-    { headers: authHeaders(route.credential) },
-    'Selected runtime receipt endpoint',
-  ));
-  if (receipt.invocation_id !== invocation.id || receipt.invocation_digest !== invocation.digest) {
-    throw new NigmaHostError('NIGMA_RUNTIME_RECEIPT_MISMATCH', 409, 'Runtime receipt changed sealed links');
-  }
-  emitEvent('receipt_observed', { ...submissionLinks, status: receipt.status });
-  const accepted = parseUpstream(AcceptedReceiptSchema, await requestJson(
-    `${control.baseUrl}/runtime-invocations/${encodeURIComponent(invocation.id)}/receipts`,
-    {
-      method: 'POST', headers: { 'X-API-Key': control.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify(receipt),
-    },
-    'Nigma receipt endpoint',
-  ));
-  if (accepted.invocation_id !== invocation.id || accepted.status !== receipt.status) {
-    throw new NigmaHostError('NIGMA_RECEIPT_ACCEPTANCE_MISMATCH', 409, 'Nigma accepted different links');
-  }
-  const receiptLinks = {
-    ...submissionLinks, receipt_id: accepted.id, receipt_digest: accepted.digest,
-  };
-  emitEvent('receipt_recorded', receiptLinks);
-  emitEvent('run_completed', { ...receiptLinks, status: accepted.status });
-  return NigmaHostRunResultSchema.parse({
-    protocol_version: 'nigma.host-run-result/v1',
-    host_run_id: hostRunId,
-    plan_id: request.plan_id,
-    invocation_id: invocation.id,
-    invocation_digest: invocation.digest,
-    runtime_id: invocation.runtime_id,
-    runtime_version: invocation.runtime_version,
-    runtime_run_id: submission.runtime_run_id,
-    runtime_submission_status: submission.status,
-    receipt_id: accepted.id,
-    receipt_digest: accepted.digest,
-    status: accepted.status,
-    events,
-  });
 }

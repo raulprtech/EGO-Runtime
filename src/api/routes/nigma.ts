@@ -14,6 +14,8 @@ import {
   NigmaEducationalPreparationRequestSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
+  getNigmaHostRunEvents,
+  getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
   runApprovedNigmaPlan,
 } from '../../runtime/nigma_host';
@@ -48,6 +50,34 @@ router.post('/host-runs', authMiddleware, async (req, res, next) => {
       return res.status(error.status).json({ error: error.code, message: error.message });
     }
     if (error instanceof ZodError) return next(error);
+    return next(error);
+  }
+});
+
+router.get('/host-runs/:host_run_id', authMiddleware, async (req, res, next) => {
+  try {
+    return res.json(await getNigmaHostRunRecord(req.params.host_run_id));
+  } catch (error) {
+    if (error instanceof NigmaHostError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    return next(error);
+  }
+});
+
+router.get('/host-runs/:host_run_id/events', authMiddleware, async (req, res, next) => {
+  try {
+    const raw = req.query.after ?? '0';
+    if (typeof raw !== 'string' || !/^\d{1,5}$/.test(raw)) {
+      throw new NigmaHostError(
+        'NIGMA_HOST_EVENT_CURSOR_INVALID', 400, 'Event cursor is invalid',
+      );
+    }
+    return res.json(await getNigmaHostRunEvents(req.params.host_run_id, Number(raw)));
+  } catch (error) {
+    if (error instanceof NigmaHostError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
     return next(error);
   }
 });

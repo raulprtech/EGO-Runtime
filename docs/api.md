@@ -12,6 +12,8 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `POST /execute` — create or safely redispatch an idempotent job.
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
 - `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
+- `GET /nigma/host-runs/:host_run_id` — read a sealed durable host-run state and content-free artifact references.
+- `GET /nigma/host-runs/:host_run_id/events?after=N` — read ordered host events after a bounded cursor.
 - `GET /nigma/:invocation_id/receipt` — translate a terminal EGO job into a Nigma execution receipt.
 - `POST /transcriptions` - transcribe one binary audio turn; see [audio transcription](audio-transcription.md).
 - `POST /speech` - synthesize one JSON text response into WAV or PCM; see [speech synthesis](speech-synthesis.md).
