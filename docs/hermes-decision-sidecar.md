@@ -1,6 +1,6 @@
 # Hermes conversation decision sidecar
 
-The G1.10–G1.11 sidecar connects an authenticated Hermes conversation to EGO's
+The G1.10–G1.12 sidecar connects an authenticated Hermes conversation to EGO's
 neutral G1.9 human-decision port. It is a trusted deployment adapter, not a
 model tool and not an ARIA backend. It records an explicit approval only; it
 cannot execute a plan.
@@ -48,6 +48,14 @@ digest, baseline count, pending state and Hermes contract digest. G1.11 bindings
 use `nigma.hermes-conversation-binding/v2` and seal both the profile hash and
 the authenticated `/v1/capabilities` contract. Legacy v1 bindings remain valid
 only for the default profile.
+
+ARIA exposes one continuous user conversation even though Hermes retains an
+opaque primary session and older compaction segments. Resolve the current
+primary session before binding, capture its complete message set as baseline,
+and present the phrase in that same session. Do not create a separate approval
+conversation or ask the user to select an internal Hermes session. A server or
+profile change and every segment rollover require a fresh preparation and
+baseline rather than silently rebinding a pending decision.
 
 ## Compatibility doctor
 
@@ -121,6 +129,21 @@ failure and preserve the same owner-only binding. Do not expose Hermes on a LAN
 or relax the HTTP URL guard merely to cross the Windows/WSL boundary. Windows
 can call a WSL-hosted EGO loopback service when that platform forwarding is
 available; otherwise use authenticated HTTPS between hosts.
+
+When Windows Node accesses `\\wsl.localhost\<distro>\...`, the adapter does
+not trust Windows' synthetic POSIX mode. It accepts only a bounded WSL UNC path,
+invokes `%SystemRoot%\System32\wsl.exe`, uses absolute `/usr/bin` utilities,
+and verifies a regular file owned by the distro's current user with mode
+`0600`. Writes precreate a random `0600` temporary file inside WSL before
+writing, atomically rename it and verify the final file. Generic Windows and
+DrvFS paths still fail closed.
+
+For a physical ARIA device on the same LAN, bearer authentication remains
+mandatory. Limit any firewall rule to the required port, local address, local
+subnet and current Windows network profiles. Local HTTP is for controlled
+testing only; remote or production use requires authenticated HTTPS. ARIA's
+stored profile and SecureStore key must match the supervised Hermes profile
+without entering a model prompt, repository or mobile bundle.
 
 ## Durable data
 

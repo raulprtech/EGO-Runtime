@@ -1,5 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import { canonicalJson, sha256 } from '../runtime/integrity';
 import {
@@ -10,6 +13,20 @@ import {
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const BoundedRef = z.string().min(1).max(300);
 const HermesProfile = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/);
+const execFileAsync = promisify(execFile);
+
+export type WslUncBindingPath = { distro: string; linuxPath: string };
+
+export function parseWslUncBindingPath(value: string): WslUncBindingPath | null {
+  const normalized = value.replaceAll('/', '\\');
+  const match = /^\\\\(?:wsl\.localhost|wsl\$)\\([A-Za-z0-9][A-Za-z0-9._-]{0,63})\\(.+)$/.exec(normalized);
+  if (!match) return null;
+  const segments = match[2].split('\\');
+  if (segments.some(segment => !segment || segment === '.' || segment === '..' || segment.includes('\0'))) {
+    return null;
+  }
+  return { distro: match[1], linuxPath: `/${segments.join('/')}` };
+}
 
 const BindingDecisionSchema = z.object({
   source_message_ref_sha256: Digest,
@@ -159,14 +176,95 @@ export function verifyHermesDecisionBinding(value: unknown): HermesDecisionBindi
   return binding;
 }
 
-export async function readHermesDecisionBindingFile(file: string): Promise<HermesDecisionBinding> {
-  const resolved = path.resolve(file);
-  const stat = await fs.stat(resolved).catch(() => null);
-  if (!stat?.isFile() || (stat.mode & 0o777) !== 0o600) {
+async function verifyWslOwnerOnly(file: string, enforce = false): Promise<void> {
+  const target = parseWslUncBindingPath(file);
+  if (!target) {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'Windows bindings must use a validated WSL UNC path',
+    );
+  }
+  const common = { windowsHide: true, timeout: 5_000, maxBuffer: 4_096 } as const;
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot || !/^[A-Za-z]:\\Windows$/i.test(systemRoot)) {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'Windows system root is unavailable or unexpected',
+    );
+  }
+  const wsl = path.win32.join(systemRoot, 'System32', 'wsl.exe');
+  try {
+    if (enforce) {
+      await execFileAsync(
+        wsl, ['-d', target.distro, '--', '/usr/bin/chmod', '600', '--', target.linuxPath], common,
+      );
+    }
+    const [statResult, userResult] = await Promise.all([
+      execFileAsync(
+        wsl, ['-d', target.distro, '--', '/usr/bin/stat', '-Lc', '%a:%u:%f', '--', target.linuxPath], common,
+      ),
+      execFileAsync(wsl, ['-d', target.distro, '--', '/usr/bin/id', '-u'], common),
+    ]);
+    const fields = statResult.stdout.trim().split(':');
+    const owner = Number(fields[1]);
+    const current = Number(userResult.stdout.trim());
+    const rawMode = Number.parseInt(fields[2] ?? '', 16);
+    if (fields.length !== 3 || fields[0] !== '600' || !Number.isSafeInteger(owner)
+        || owner !== current || !Number.isSafeInteger(rawMode) || (rawMode & 0xf000) !== 0x8000) {
+      throw new Error('unsafe WSL mode, owner or file type');
+    }
+  } catch {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'WSL binding must be a regular owner-only 0600 file',
+    );
+  }
+}
+
+async function createWslOwnerOnlyFile(file: string): Promise<void> {
+  const target = parseWslUncBindingPath(file);
+  const systemRoot = process.env.SystemRoot;
+  if (!target || !systemRoot || !/^[A-Za-z]:\\Windows$/i.test(systemRoot)) {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'Windows binding path or system root is unsafe',
+    );
+  }
+  const wsl = path.win32.join(systemRoot, 'System32', 'wsl.exe');
+  try {
+    await execFileAsync(wsl, [
+      '-d', target.distro, '--', '/usr/bin/install', '-m', '600',
+      '/dev/null', '--', target.linuxPath,
+    ], { windowsHide: true, timeout: 5_000, maxBuffer: 4_096 });
+    await verifyWslOwnerOnly(file);
+  } catch {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'Could not precreate the WSL binding as owner-only',
+    );
+  }
+}
+
+async function verifyOwnerOnlyStorage(file: string, enforce = false): Promise<void> {
+  const stat = await fs.lstat(file).catch(() => null);
+  if (!stat?.isFile() || stat.isSymbolicLink()) {
+    throw new HermesDecisionAdapterError(
+      'BINDING_STORAGE_UNSAFE', 'Binding must be a regular owner-only file',
+    );
+  }
+  if (process.platform === 'win32') {
+    await verifyWslOwnerOnly(file, enforce);
+    return;
+  }
+  if (enforce) await fs.chmod(file, 0o600);
+  const checked = await fs.lstat(file);
+  const currentUid = process.getuid?.();
+  if ((checked.mode & 0o777) !== 0o600
+      || (currentUid !== undefined && checked.uid !== currentUid)) {
     throw new HermesDecisionAdapterError(
       'BINDING_STORAGE_UNSAFE', 'Binding must be a regular owner-only 0600 file',
     );
   }
+}
+
+export async function readHermesDecisionBindingFile(file: string): Promise<HermesDecisionBinding> {
+  const resolved = path.resolve(file);
+  await verifyOwnerOnlyStorage(resolved);
   let value: unknown;
   try { value = JSON.parse(await fs.readFile(resolved, 'utf8')); } catch {
     throw new HermesDecisionAdapterError('BINDING_FILE_INVALID', 'Binding is not valid JSON');
@@ -181,16 +279,25 @@ export async function writeHermesDecisionBindingFile(
   const binding = verifyHermesDecisionBinding(bindingValue);
   const resolved = path.resolve(file);
   await fs.mkdir(path.dirname(resolved), { recursive: true, mode: 0o700 });
-  const temporary = `${resolved}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(binding, null, 2)}\n`, { mode: 0o600 });
-  await fs.chmod(temporary, 0o600);
-  await fs.rename(temporary, resolved);
-  await fs.chmod(resolved, 0o600);
-  if (((await fs.stat(resolved)).mode & 0o777) !== 0o600) {
-    await fs.unlink(resolved).catch(() => undefined);
-    throw new HermesDecisionAdapterError(
-      'BINDING_STORAGE_UNSAFE', 'Binding storage cannot enforce owner-only permissions',
-    );
+  const temporary = `${resolved}.${randomUUID()}.tmp`;
+  let replaced = false;
+  try {
+    if (process.platform === 'win32') {
+      await createWslOwnerOnlyFile(temporary);
+      await fs.writeFile(temporary, `${JSON.stringify(binding, null, 2)}\n`);
+    } else {
+      await fs.writeFile(temporary, `${JSON.stringify(binding, null, 2)}\n`, {
+        mode: 0o600, flag: 'wx',
+      });
+    }
+    await verifyOwnerOnlyStorage(temporary, true);
+    await fs.rename(temporary, resolved);
+    replaced = true;
+    await verifyOwnerOnlyStorage(resolved, true);
+  } catch (error) {
+    await fs.unlink(temporary).catch(() => undefined);
+    if (replaced) await fs.unlink(resolved).catch(() => undefined);
+    throw error;
   }
 }
 

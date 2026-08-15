@@ -6,6 +6,7 @@ import {
   expireHermesDecisionBinding,
   fetchHermesDecisionMessages,
   inspectHermesDecisionMessages,
+  parseWslUncBindingPath,
   probeHermesDecisionCompatibility,
   readHermesDecisionBindingFile,
   scanHermesDecisionBinding,
@@ -134,6 +135,16 @@ function binding() {
 }
 
 describe('Hermes trusted-decision sidecar', () => {
+  it('accepts only bounded WSL UNC binding paths for Windows supervision', () => {
+    expect(parseWslUncBindingPath('\\\\wsl.localhost\\Ubuntu\\home\\raulprtech\\binding.json'))
+      .toEqual({ distro: 'Ubuntu', linuxPath: '/home/raulprtech/binding.json' });
+    expect(parseWslUncBindingPath('\\\\wsl$\\Ubuntu\\tmp\\binding.json'))
+      .toEqual({ distro: 'Ubuntu', linuxPath: '/tmp/binding.json' });
+    expect(parseWslUncBindingPath('C:\\Users\\raul_\\binding.json')).toBeNull();
+    expect(parseWslUncBindingPath('\\\\wsl.localhost\\Ubuntu\\tmp\\..\\binding.json')).toBeNull();
+    expect(parseWslUncBindingPath('\\\\server\\share\\binding.json')).toBeNull();
+  });
+
   it('creates a sealed content-free baseline and persists it owner-only', async () => {
     const value = binding();
     const text = JSON.stringify(value);
@@ -151,6 +162,19 @@ describe('Hermes trusted-decision sidecar', () => {
     await writeHermesDecisionBindingFile(file, value);
     expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
     await expect(readHermesDecisionBindingFile(file)).resolves.toEqual(value);
+  });
+
+  it('preserves the previous binding when atomic replacement fails', async () => {
+    const directory = await fs.mkdtemp(path.join('/tmp', 'ego-g112-binding-'));
+    directories.push(directory);
+    const file = path.join(directory, 'binding.json');
+    const value = binding();
+    await writeHermesDecisionBindingFile(file, value);
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('rename failed'));
+    await expect(writeHermesDecisionBindingFile(file, value)).rejects.toThrow('rename failed');
+    rename.mockRestore();
+    await expect(readHermesDecisionBindingFile(file)).resolves.toEqual(value);
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
   });
 
   it('ignores baseline, model and decorated messages without contacting EGO', async () => {
