@@ -15,12 +15,14 @@ import {
   NigmaPresentationLocaleSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
+  NigmaTrustedConversationDecisionRequestSchema,
   NigmaTrustedHumanApprovalRequestSchema,
   getNigmaHostRunEvents,
   getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
   prepareNigmaHostFallback,
   renderNigmaHostPreparationSse,
+  recordTrustedNigmaConversationDecision,
   recordTrustedNigmaHumanApproval,
   runApprovedNigmaPlan,
 } from '../../runtime/nigma_host';
@@ -65,6 +67,26 @@ router.post(
     try {
       const submission = NigmaTrustedHumanApprovalRequestSchema.parse(req.body);
       return res.json(await recordTrustedNigmaHumanApproval(
+        submission, req.header('Idempotency-Key') ?? '',
+      ));
+    } catch (error) {
+      if (error instanceof NigmaHostError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
+      if (error instanceof ZodError) return next(error);
+      return next(error);
+    }
+  },
+);
+
+router.post(
+  '/conversation-decisions',
+  authMiddleware,
+  humanDecisionMiddleware,
+  async (req, res, next) => {
+    try {
+      const submission = NigmaTrustedConversationDecisionRequestSchema.parse(req.body);
+      return res.json(await recordTrustedNigmaConversationDecision(
         submission, req.header('Idempotency-Key') ?? '',
       ));
     } catch (error) {

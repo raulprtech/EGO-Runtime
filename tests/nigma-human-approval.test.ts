@@ -147,11 +147,12 @@ describe('trusted Nigma human approval bridge', () => {
     const control = express();
     control.use(express.json());
     const approvalBodies: Array<Record<string, unknown>> = [];
+    const approvalKeys: string[] = [];
     control.post('/educational-tasks/prepare', (_req, res) => res.json(upstreamPreparation()));
     control.post('/integration-plans/:plan_id/approvals', (req, res) => {
       approvalBodies.push(req.body);
+      approvalKeys.push(req.header('idempotency-key') ?? '');
       expect(req.header('x-api-key')).toBe('control-approval-key');
-      expect(req.header('idempotency-key')).toBe('human-decision-1');
       res.json({
         ...req.body,
         id: 'approval-record-1',
@@ -288,6 +289,128 @@ describe('trusted Nigma human approval bridge', () => {
     closers.push(host.close);
     endpoint = `${host.baseUrl}/v1/runtime/nigma/human-approvals`;
 
+    const conversationEndpoint = `${host.baseUrl}/v1/runtime/nigma/conversation-decisions`;
+    const conversationSubmission = {
+      protocol_version: 'nigma.trusted-conversation-decision/v1',
+      host_preparation_id: preparation.host_preparation_id,
+      interface_projection_id: preparation.interface_projection.id,
+      interface_projection_digest: preparation.interface_projection.digest,
+      turn: {
+        role: 'user',
+        origin: 'externally_authenticated_human',
+        conversation_ref: 'aria-session-local-1',
+        message_ref: 'aria-message-local-1',
+        observed_at: new Date().toISOString(),
+        content: submission.approval_phrase,
+      },
+      approver: 'local-owner',
+      expires_at: expiresAt,
+    };
+    const conversationHeaders = {
+      ...commonHeaders,
+      'X-Nigma-Human-Decision-Token': humanToken,
+      'Idempotency-Key': 'conversation-decision-1',
+    };
+
+    const modelRole = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: conversationHeaders,
+      body: JSON.stringify({
+        ...conversationSubmission,
+        turn: { ...conversationSubmission.turn, role: 'assistant' },
+      }),
+    });
+    expect(modelRole.status).toBe(400);
+    expect(approvalBodies).toHaveLength(0);
+
+    const conversationWithoutHumanCredential = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: {
+        ...commonHeaders,
+        'Idempotency-Key': 'conversation-decision-1',
+      },
+      body: JSON.stringify(conversationSubmission),
+    });
+    expect(conversationWithoutHumanCredential.status).toBe(401);
+    expect(approvalBodies).toHaveLength(0);
+
+    const conversationWithExtraText = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: conversationHeaders,
+      body: JSON.stringify({
+        ...conversationSubmission,
+        turn: {
+          ...conversationSubmission.turn,
+          content: `Por favor, ${conversationSubmission.turn.content}`,
+        },
+      }),
+    });
+    expect(conversationWithExtraText.status).toBe(409);
+    expect(approvalBodies).toHaveLength(0);
+
+    const staleConversation = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: conversationHeaders,
+      body: JSON.stringify({
+        ...conversationSubmission,
+        turn: {
+          ...conversationSubmission.turn,
+          observed_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+        },
+      }),
+    });
+    expect(staleConversation.status).toBe(409);
+    expect(approvalBodies).toHaveLength(0);
+
+    const conversationApproved = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: conversationHeaders,
+      body: JSON.stringify(conversationSubmission),
+    });
+    const conversationResult = await conversationApproved.json();
+    expect(conversationApproved.status, JSON.stringify(conversationResult)).toBe(200);
+    expect(conversationResult).toMatchObject({
+      protocol_version: 'nigma.trusted-conversation-decision-record/v1',
+      source_conversation_ref_sha256: sha256('conversation:aria-session-local-1'),
+      source_message_ref_sha256: sha256('message:aria-message-local-1'),
+      observed_at: conversationSubmission.turn.observed_at,
+      authority: 'trusted_conversation_adapter',
+      approval_recorded: true,
+      execution_performed: false,
+      approval: {
+        protocol_version: 'nigma.trusted-human-approval-record/v1',
+        approval_recorded: true,
+        execution_performed: false,
+      },
+    });
+    const { digest: conversationDigest, ...conversationCore } = conversationResult;
+    expect(conversationDigest).toBe(sha256(canonicalJson(conversationCore)));
+    expect(approvalBodies).toHaveLength(1);
+    expect(approvalKeys).toEqual(['conversation-decision-1']);
+    expect(approvalBodies[0]).toMatchObject({
+      evidence: {
+        protocol_version: 'nigma.trusted-conversation-decision-evidence/v1',
+        channel: 'trusted_conversation_adapter',
+        source_conversation_ref_sha256: sha256('conversation:aria-session-local-1'),
+        source_message_ref_sha256: sha256('message:aria-message-local-1'),
+        observed_at: conversationSubmission.turn.observed_at,
+      },
+    });
+    const forwardedConversation = JSON.stringify(approvalBodies[0]);
+    expect(forwardedConversation).not.toContain(conversationSubmission.turn.content);
+    expect(forwardedConversation).not.toContain(conversationSubmission.turn.conversation_ref);
+    expect(forwardedConversation).not.toContain(conversationSubmission.turn.message_ref);
+
+    const conversationReplay = await fetch(conversationEndpoint, {
+      method: 'POST',
+      headers: conversationHeaders,
+      body: JSON.stringify(conversationSubmission),
+    });
+    expect(conversationReplay.status).toBe(200);
+    await expect(conversationReplay.json()).resolves.toEqual(conversationResult);
+    expect(approvalBodies).toHaveLength(2);
+    expect(approvalBodies[1]).toEqual(approvalBodies[0]);
+
     const approved = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -310,8 +433,8 @@ describe('trusted Nigma human approval bridge', () => {
     });
     const { digest, ...resultCore } = result;
     expect(digest).toBe(sha256(canonicalJson(resultCore)));
-    expect(approvalBodies).toHaveLength(1);
-    expect(approvalBodies[0]).toMatchObject({
+    expect(approvalBodies).toHaveLength(3);
+    expect(approvalBodies[2]).toMatchObject({
       decision: 'approved', scope: 'execute', expires_at: expiresAt,
       plan_digest: hex('b'), agent_route_id: 'agent-route-approval-1',
       evidence: {
@@ -321,7 +444,7 @@ describe('trusted Nigma human approval bridge', () => {
         approval_phrase_sha256: sha256(submission.approval_phrase),
       },
     });
-    expect(JSON.stringify(approvalBodies[0])).not.toContain(submission.approval_phrase);
+    expect(JSON.stringify(approvalBodies[2])).not.toContain(submission.approval_phrase);
 
     const replay = await fetch(endpoint, {
       method: 'POST',
@@ -334,7 +457,11 @@ describe('trusted Nigma human approval bridge', () => {
     });
     expect(replay.status).toBe(200);
     await expect(replay.json()).resolves.toEqual(result);
-    expect(approvalBodies).toHaveLength(2);
-    expect(approvalBodies[1]).toEqual(approvalBodies[0]);
+    expect(approvalBodies).toHaveLength(4);
+    expect(approvalBodies[3]).toEqual(approvalBodies[2]);
+    expect(approvalKeys).toEqual([
+      'conversation-decision-1', 'conversation-decision-1',
+      'human-decision-1', 'human-decision-1',
+    ]);
   });
 });

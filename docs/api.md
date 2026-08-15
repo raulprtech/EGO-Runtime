@@ -13,6 +13,7 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
 - `POST /nigma/educational-tasks/prepare` — obtain a verified pre-approval plan view as JSON, or its generic interface events with explicit `Accept: text/event-stream`.
 - `POST /nigma/human-approvals` — record an exact, separately authenticated human approval for a persisted sealed preparation; never execute it.
+- `POST /nigma/conversation-decisions` — map one externally authenticated human `user` turn to the exact approval adapter; model/tool roles cannot use it.
 - `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
 - `GET /nigma/host-runs/:host_run_id` — read a sealed durable host-run state and content-free artifact references.
 - `GET /nigma/host-runs/:host_run_id/events?after=N` — read ordered host events after a bounded cursor.
@@ -59,6 +60,23 @@ one minute and cannot outlive the challenge. A successful response is
 `nigma.trusted-human-approval-record/v1` with `approval_recorded=true` and
 `execution_performed=false`. Execution remains a separate `/nigma/host-runs`
 request and Nigma independently revalidates the current approval.
+
+## Trusted conversation decision
+
+`POST /nigma/conversation-decisions` uses the same two independent credentials
+as `/nigma/human-approvals`. Its strict
+`nigma.trusted-conversation-decision/v1` body identifies the sealed
+preparation/projection and one turn with `role=user`,
+`origin=externally_authenticated_human`, opaque conversation/message
+references, observation time and content.
+
+The complete turn content must equal the sealed approval phrase byte for byte;
+prefixes, suffixes and normalization are not accepted. The observation must
+fall within the presentation challenge window with at most 30 seconds of clock
+skew. EGO hashes both opaque references with domain separation, forwards only
+those hashes and seals `nigma.trusted-conversation-decision-record/v1`. Raw
+conversation IDs, message IDs and message content are not retained in Nigma.
+The result records approval only and always has `execution_performed=false`.
 
 ## Runtime manifest
 

@@ -93,6 +93,43 @@ response and returns a separately sealed record. It does not request an
 invocation, contact a selected runtime or execute. A later `/host-runs` call is
 still required and Nigma remains authoritative for approval validity.
 
+### Conversation adapter
+
+A host that already authenticates conversation actors may use the narrower
+conversation-shaped input instead of copying fields into `/human-approvals`:
+
+```http
+POST /v1/runtime/nigma/conversation-decisions
+Authorization: Bearer <host-runtime-token>
+X-Nigma-Human-Decision-Token: <independent-human-channel-secret>
+Idempotency-Key: <stable-message-decision-key>
+Content-Type: application/json
+
+{
+  "protocol_version": "nigma.trusted-conversation-decision/v1",
+  "host_preparation_id": "host-preparation-...",
+  "interface_projection_id": "host-preparation-interface-...",
+  "interface_projection_digest": "<64-hex>",
+  "turn": {
+    "role": "user",
+    "origin": "externally_authenticated_human",
+    "conversation_ref": "<host-opaque-reference>",
+    "message_ref": "<host-opaque-reference>",
+    "observed_at": "<ISO-8601 timestamp>",
+    "content": "<exact approval phrase and nothing else>"
+  },
+  "approver": "local-owner",
+  "expires_at": "<absolute ISO-8601 timestamp>"
+}
+```
+
+The separate human credential is the technical trust boundary: it must remain
+in the host adapter and outside model context. `role=user` is additionally
+schema-enforced, the whole content must match the challenge exactly, and the
+observation must occur after presentation. Nigma receives domain-separated
+hashes rather than the raw conversation/message references. This is a neutral
+port; it does not make EGO emulate Hermes chat APIs and requires no ARIA change.
+
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
 ```http

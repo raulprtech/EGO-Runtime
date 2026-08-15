@@ -531,6 +531,26 @@ export type NigmaTrustedHumanApprovalRequest = z.infer<
   typeof NigmaTrustedHumanApprovalRequestSchema
 >;
 
+export const NigmaTrustedConversationDecisionRequestSchema = z.object({
+  protocol_version: z.literal('nigma.trusted-conversation-decision/v1'),
+  host_preparation_id: BoundedId,
+  interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  interface_projection_digest: Digest,
+  turn: z.object({
+    role: z.literal('user'),
+    origin: z.literal('externally_authenticated_human'),
+    conversation_ref: BoundedId,
+    message_ref: BoundedId,
+    observed_at: z.iso.datetime(),
+    content: z.string().min(1).max(1000),
+  }).strict(),
+  approver: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/),
+  expires_at: z.iso.datetime(),
+}).strict();
+export type NigmaTrustedConversationDecisionRequest = z.infer<
+  typeof NigmaTrustedConversationDecisionRequestSchema
+>;
+
 const NigmaApprovalUpstreamSchema = z.object({
   id: BoundedId,
   plan_id: BoundedId,
@@ -572,6 +592,27 @@ export const NigmaTrustedHumanApprovalResultSchema = z.object({
 export type NigmaTrustedHumanApprovalResult = z.infer<
   typeof NigmaTrustedHumanApprovalResultSchema
 >;
+
+export const NigmaTrustedConversationDecisionResultSchema = z.object({
+  protocol_version: z.literal('nigma.trusted-conversation-decision-record/v1'),
+  source_conversation_ref_sha256: Digest,
+  source_message_ref_sha256: Digest,
+  observed_at: z.iso.datetime(),
+  approval: NigmaTrustedHumanApprovalResultSchema,
+  authority: z.literal('trusted_conversation_adapter'),
+  approval_recorded: z.literal(true),
+  execution_performed: z.literal(false),
+  digest: Digest,
+}).strict();
+export type NigmaTrustedConversationDecisionResult = z.infer<
+  typeof NigmaTrustedConversationDecisionResultSchema
+>;
+
+type TrustedConversationSource = {
+  source_conversation_ref_sha256: string;
+  source_message_ref_sha256: string;
+  observed_at: string;
+};
 
 const NigmaHumanApprovalChallengeCoreSchema = z.object({
   protocol_version: z.literal('nigma.human-approval-challenge/v1'),
@@ -876,9 +917,10 @@ async function verifyTrustedApprovalPreparation(
   return { challenge, phraseHash };
 }
 
-export async function recordTrustedNigmaHumanApproval(
+async function recordTrustedNigmaApproval(
   submission: NigmaTrustedHumanApprovalRequest,
   idempotencyKey: string,
+  conversationSource?: TrustedConversationSource,
 ): Promise<NigmaTrustedHumanApprovalResult> {
   if (!idempotencyKey || idempotencyKey.length > 200) {
     throw new NigmaHostError(
@@ -894,6 +936,19 @@ export async function recordTrustedNigmaHumanApproval(
     );
   }
   const { challenge, phraseHash } = await verifyTrustedApprovalPreparation(submission);
+  if (conversationSource) {
+    const observedAtMs = Date.parse(conversationSource.observed_at);
+    const challengeCreatedAtMs = Date.parse(challenge.created_at);
+    const challengeExpiresAtMs = Date.parse(challenge.expires_at);
+    if (observedAtMs < challengeCreatedAtMs - 30_000
+        || observedAtMs > now + 30_000
+        || observedAtMs > challengeExpiresAtMs) {
+      throw new NigmaHostError(
+        'NIGMA_CONVERSATION_DECISION_TIME_INVALID', 409,
+        'Human conversation turn was not observed within the sealed presentation window',
+      );
+    }
+  }
   if (expiresAtMs > Date.parse(challenge.expires_at)) {
     throw new NigmaHostError(
       'NIGMA_HUMAN_APPROVAL_EXPIRY_INVALID', 400,
@@ -902,7 +957,15 @@ export async function recordTrustedNigmaHumanApproval(
   }
   const target = challenge.approval_target;
   const expiresAt = new Date(expiresAtMs).toISOString();
-  const evidence = {
+  const evidence = conversationSource ? {
+    protocol_version: 'nigma.trusted-conversation-decision-evidence/v1',
+    channel: 'trusted_conversation_adapter',
+    source_host_preparation_id: challenge.host_preparation_id,
+    source_interface_projection_id: challenge.interface_projection_id,
+    source_interface_projection_digest: challenge.interface_projection_digest,
+    approval_phrase_sha256: phraseHash,
+    ...conversationSource,
+  } : {
     protocol_version: 'nigma.trusted-human-decision-evidence/v1',
     channel: 'trusted_host_adapter',
     source_host_preparation_id: challenge.host_preparation_id,
@@ -930,7 +993,6 @@ export async function recordTrustedNigmaHumanApproval(
     },
     'Nigma human approval endpoint',
   ));
-  const returnedEvidence = approval.evidence;
   const responseAgrees = approval.plan_id === target.plan_id
     && approval.plan_digest === target.plan_digest
     && approval.agent_route_id === target.agent_route_id
@@ -941,10 +1003,7 @@ export async function recordTrustedNigmaHumanApproval(
     && approval.provider_binding_digest === target.provider_binding_digest
     && approval.approver === submission.approver
     && Date.parse(approval.expires_at) === Date.parse(expiresAt)
-    && returnedEvidence.source_host_preparation_id === challenge.host_preparation_id
-    && returnedEvidence.source_interface_projection_id === challenge.interface_projection_id
-    && returnedEvidence.source_interface_projection_digest === challenge.interface_projection_digest
-    && returnedEvidence.approval_phrase_sha256 === phraseHash;
+    && canonicalJson(approval.evidence) === canonicalJson(evidence);
   if (!responseAgrees) {
     throw new NigmaHostError(
       'NIGMA_HUMAN_APPROVAL_UPSTREAM_MISMATCH', 502,
@@ -971,6 +1030,45 @@ export async function recordTrustedNigmaHumanApproval(
     execution_performed: false as const,
   };
   return NigmaTrustedHumanApprovalResultSchema.parse({
+    ...provisional,
+    digest: sha256(canonicalJson(provisional)),
+  });
+}
+
+export async function recordTrustedNigmaHumanApproval(
+  submission: NigmaTrustedHumanApprovalRequest,
+  idempotencyKey: string,
+): Promise<NigmaTrustedHumanApprovalResult> {
+  return recordTrustedNigmaApproval(submission, idempotencyKey);
+}
+
+export async function recordTrustedNigmaConversationDecision(
+  submission: NigmaTrustedConversationDecisionRequest,
+  idempotencyKey: string,
+): Promise<NigmaTrustedConversationDecisionResult> {
+  const source = {
+    source_conversation_ref_sha256: sha256(`conversation:${submission.turn.conversation_ref}`),
+    source_message_ref_sha256: sha256(`message:${submission.turn.message_ref}`),
+    observed_at: new Date(Date.parse(submission.turn.observed_at)).toISOString(),
+  };
+  const approval = await recordTrustedNigmaApproval({
+    protocol_version: 'nigma.trusted-human-approval-submission/v1',
+    host_preparation_id: submission.host_preparation_id,
+    interface_projection_id: submission.interface_projection_id,
+    interface_projection_digest: submission.interface_projection_digest,
+    approval_phrase: submission.turn.content,
+    approver: submission.approver,
+    expires_at: submission.expires_at,
+  }, idempotencyKey, source);
+  const provisional = {
+    protocol_version: 'nigma.trusted-conversation-decision-record/v1' as const,
+    ...source,
+    approval,
+    authority: 'trusted_conversation_adapter' as const,
+    approval_recorded: true as const,
+    execution_performed: false as const,
+  };
+  return NigmaTrustedConversationDecisionResultSchema.parse({
     ...provisional,
     digest: sha256(canonicalJson(provisional)),
   });
