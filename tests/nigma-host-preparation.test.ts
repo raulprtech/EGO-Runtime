@@ -2,6 +2,7 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../server';
+import { canonicalJson, sha256 } from '../src/runtime/integrity';
 
 async function listen(app: express.Express) {
   const server = app.listen(0, '127.0.0.1');
@@ -35,7 +36,47 @@ function task() {
   };
 }
 
-function nigmaPreparation() {
+function runtimeExplanation() {
+  const payload = {
+    protocol_version: 'nigma.runtime-decision-explanation/v1' as const,
+    algorithm_version: 'runtime-decision-explanation-v1' as const,
+    selection_id: 'runtime-selection-1',
+    selection_digest: digest('8'),
+    selected: {
+      runtime_id: 'ego-runtime', runtime_version: '0.9.0',
+      snapshot_id: 'ego-runtime@0.9.0', snapshot_digest: digest('f'),
+      total_score_ppm: 200_000, evidence_basis: 'declared_only' as const,
+    },
+    runner_up: {
+      runtime_id: 'hermes-runtime', runtime_version: '0.20.0',
+      snapshot_id: 'hermes-runtime@0.20.0', snapshot_digest: digest('7'),
+      total_score_ppm: 180_000, evidence_basis: 'declared_only' as const,
+    },
+    eligible_candidate_count: 2,
+    excluded_candidate_count: 0,
+    score_margin_ppm: 20_000,
+    factors: [{
+      dimension: 'reliability', selected_weighted_score_ppm: 200_000,
+      runner_up_weighted_score_ppm: 180_000, delta_ppm: 20_000,
+    }],
+    reason_codes: [
+      'highest_eligible_score', 'all_hard_constraints_satisfied',
+      'human_approval_required',
+    ] as const,
+    authority: 'human_approval_required' as const,
+    approval_granted: false as const,
+    execution_performed: false as const,
+    created_at: '2026-08-14T12:00:00Z',
+  };
+  const explanationDigest = sha256(canonicalJson(payload));
+  return {
+    ...payload,
+    id: `runtime-decision-explanation-${explanationDigest.slice(0, 16)}`,
+    digest: explanationDigest,
+  };
+}
+
+function nigmaPreparation(includeExplanation = true) {
   const plan = { id: 'plan-1', digest: digest('b') };
   const plugin = { id: 'plugin-selection-1', digest: digest('c') };
   const provider = { id: 'provider-binding-1', digest: digest('d') };
@@ -58,6 +99,7 @@ function nigmaPreparation() {
         selected_runtime_version: '0.9.0',
       },
     },
+    ...(includeExplanation ? { runtime_explanation: runtimeExplanation() } : {}),
     plugin_selection: { ...plugin, status: 'selected' },
     provider_binding: { ...provider, status: 'ready' },
     agent_route: {
@@ -148,6 +190,16 @@ describe('Nigma educational host preparation', () => {
       objective: task().objective,
       plan: { id: 'plan-1', digest: digest('b') },
       runtime: { id: 'ego-runtime', version: '0.9.0' },
+      runtime_decision: {
+        selection_id: 'runtime-selection-1',
+        selection_digest: digest('8'),
+        selected_score_ppm: 200_000,
+        runner_up: { runtime_id: 'hermes-runtime', total_score_ppm: 180_000 },
+        score_margin_ppm: 20_000,
+        authority: 'human_approval_required',
+        approval_granted: false,
+        execution_performed: false,
+      },
       approval_target: {
         scope: 'execute',
         plan_id: 'plan-1',
@@ -162,6 +214,22 @@ describe('Nigma educational host preparation', () => {
       execution_performed: false,
     });
     expect(preparations).toBe(1);
+  });
+
+  it('accepts a historical preparation without the optional explanation', async () => {
+    const control = express();
+    control.use(express.json());
+    control.post('/educational-tasks/prepare', (_req, res) => {
+      res.json(nigmaPreparation(false));
+    });
+    const runtime = await runtimeFor(control);
+    const response = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers, body: JSON.stringify(task()) },
+    );
+    const result = await response.json() as { runtime_decision?: unknown };
+    expect(response.status).toBe(200);
+    expect(result.runtime_decision).toBeUndefined();
   });
 
   it('requires auth and a bounded idempotency key before contacting Nigma', async () => {
@@ -200,6 +268,23 @@ describe('Nigma educational host preparation', () => {
         ...nigmaPreparation().approval_target, agent_route_digest: digest('9'),
       } },
       { ...nigmaPreparation(), approval_granted: true },
+      { ...nigmaPreparation(), runtime_explanation: {
+        ...runtimeExplanation(), digest: digest('9'),
+      } },
+      { ...nigmaPreparation(), runtime_explanation: {
+        ...runtimeExplanation(), selection_id: 'another-selection',
+      } },
+      (() => {
+        const value = runtimeExplanation();
+        const { id: _id, digest: _digest, ...payload } = value;
+        const changed = { ...payload, score_margin_ppm: 1 };
+        const changedDigest = sha256(canonicalJson(changed));
+        return { ...nigmaPreparation(), runtime_explanation: {
+          ...changed,
+          id: `runtime-decision-explanation-${changedDigest.slice(0, 16)}`,
+          digest: changedDigest,
+        } };
+      })(),
     ]) {
       const control = express();
       control.use(express.json());
@@ -213,6 +298,7 @@ describe('Nigma educational host preparation', () => {
       const body = await response.json() as { error: string };
       expect([
         'NIGMA_PREPARATION_LINK_MISMATCH', 'NIGMA_HOST_UPSTREAM_INVALID',
+        'NIGMA_RUNTIME_EXPLANATION_INVALID',
       ]).toContain(body.error);
       await closers.pop()?.();
       await closers.pop()?.();

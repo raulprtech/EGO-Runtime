@@ -6,6 +6,7 @@ import {
   NigmaInvocationEnvelopeSchema,
   type NigmaInvocationEnvelope,
 } from './nigma_handoff';
+import { canonicalJson, sha256 } from './integrity';
 
 const BoundedId = z.string().min(1).max(300);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -238,6 +239,94 @@ const PreparationApprovalTargetSchema = z.object({
   provider_binding_digest: Digest,
 }).strict();
 
+const RuntimeDecisionCandidateSchema = z.object({
+  runtime_id: z.string().min(1).max(200),
+  runtime_version: z.string().min(1).max(100),
+  snapshot_id: BoundedId,
+  snapshot_digest: Digest,
+  total_score_ppm: z.number().int().min(0).max(1_000_000),
+  evidence_basis: z.enum(['declared_only', 'reviewed_operational']),
+}).strict();
+
+const RuntimeDecisionFactorSchema = z.object({
+  dimension: z.string().min(1).max(100),
+  selected_weighted_score_ppm: z.number().int().min(0).max(1_000_000),
+  runner_up_weighted_score_ppm: z.number().int().min(0).max(1_000_000).nullable(),
+  delta_ppm: z.number().int().min(-1_000_000).max(1_000_000),
+}).strict();
+
+const RuntimeDecisionExplanationSchema = z.object({
+  protocol_version: z.literal('nigma.runtime-decision-explanation/v1'),
+  id: z.string().regex(/^runtime-decision-explanation-[a-f0-9]{16}$/),
+  algorithm_version: z.literal('runtime-decision-explanation-v1'),
+  selection_id: BoundedId,
+  selection_digest: Digest,
+  selected: RuntimeDecisionCandidateSchema,
+  runner_up: RuntimeDecisionCandidateSchema.nullable(),
+  eligible_candidate_count: z.number().int().min(1).max(1000),
+  excluded_candidate_count: z.number().int().min(0).max(1000),
+  score_margin_ppm: z.number().int().min(0).max(1_000_000),
+  factors: z.array(RuntimeDecisionFactorSchema).min(1).max(20),
+  reason_codes: z.array(z.enum([
+    'highest_eligible_score', 'reviewed_operational_evidence_applied',
+    'all_hard_constraints_satisfied', 'human_approval_required',
+  ])).min(3).max(4),
+  authority: z.literal('human_approval_required'),
+  approval_granted: z.literal(false),
+  execution_performed: z.literal(false),
+  created_at: z.iso.datetime(),
+  digest: Digest,
+}).strict().superRefine((value, context) => {
+  const dimensions = value.factors.map(item => item.dimension);
+  if (new Set(dimensions).size !== dimensions.length) {
+    context.addIssue({ code: 'custom', message: 'runtime explanation factors repeat' });
+  }
+  if ((value.runner_up === null) !== (value.eligible_candidate_count === 1)) {
+    context.addIssue({ code: 'custom', message: 'runtime explanation runner-up is inconsistent' });
+  }
+  const requiredReasons = [
+    'highest_eligible_score', 'all_hard_constraints_satisfied',
+    'human_approval_required',
+  ];
+  if (new Set(value.reason_codes).size !== value.reason_codes.length
+      || requiredReasons.some(reason => !value.reason_codes.some(code => code === reason))) {
+    context.addIssue({ code: 'custom', message: 'runtime explanation reasons are inconsistent' });
+  }
+  const selectedTotal = value.factors.reduce(
+    (total, item) => total + item.selected_weighted_score_ppm, 0,
+  );
+  if (selectedTotal !== value.selected.total_score_ppm) {
+    context.addIssue({ code: 'custom', message: 'runtime explanation selected score is inconsistent' });
+  }
+  if (value.runner_up === null) {
+    if (value.factors.some(item => item.runner_up_weighted_score_ppm !== null
+      || item.delta_ppm !== item.selected_weighted_score_ppm)
+      || value.score_margin_ppm !== value.selected.total_score_ppm) {
+      context.addIssue({ code: 'custom', message: 'runtime explanation single-candidate arithmetic is inconsistent' });
+    }
+  } else {
+    const runnerTotal = value.factors.reduce(
+      (total, item) => total + (item.runner_up_weighted_score_ppm ?? 0), 0,
+    );
+    if (value.factors.some(item => item.runner_up_weighted_score_ppm === null
+      || item.delta_ppm !== item.selected_weighted_score_ppm
+        - (item.runner_up_weighted_score_ppm ?? 0))
+      || runnerTotal !== value.runner_up.total_score_ppm
+      || value.score_margin_ppm
+        !== value.selected.total_score_ppm - value.runner_up.total_score_ppm) {
+      context.addIssue({ code: 'custom', message: 'runtime explanation comparative arithmetic is inconsistent' });
+    }
+  }
+  const operational = [value.selected, value.runner_up]
+    .filter(item => item !== null)
+    .some(item => item?.evidence_basis === 'reviewed_operational');
+  if (operational !== value.reason_codes.includes('reviewed_operational_evidence_applied')) {
+    context.addIssue({ code: 'custom', message: 'runtime explanation evidence reason is inconsistent' });
+  }
+});
+
+type RuntimeDecisionExplanation = z.infer<typeof RuntimeDecisionExplanationSchema>;
+
 const NigmaEducationalPreparationUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-task-preparation/v1'),
   status: z.literal('awaiting_human_approval'),
@@ -260,6 +349,7 @@ const NigmaEducationalPreparationUpstreamSchema = z.object({
       selected_runtime_version: z.string().min(1).max(100),
     }).passthrough(),
   }).passthrough(),
+  runtime_explanation: RuntimeDecisionExplanationSchema.optional(),
   plugin_selection: z.object({
     id: BoundedId,
     digest: Digest,
@@ -311,6 +401,26 @@ export const NigmaHostPreparationResultSchema = z.object({
     snapshot_id: BoundedId,
     snapshot_digest: Digest,
   }).strict(),
+  runtime_decision: z.object({
+    explanation_id: z.string().regex(/^runtime-decision-explanation-[a-f0-9]{16}$/),
+    explanation_digest: Digest,
+    selection_id: BoundedId,
+    selection_digest: Digest,
+    selected_score_ppm: z.number().int().min(0).max(1_000_000),
+    selected_evidence_basis: z.enum(['declared_only', 'reviewed_operational']),
+    runner_up: z.object({
+      runtime_id: z.string().min(1).max(200),
+      runtime_version: z.string().min(1).max(100),
+      total_score_ppm: z.number().int().min(0).max(1_000_000),
+      evidence_basis: z.enum(['declared_only', 'reviewed_operational']),
+    }).strict().nullable(),
+    score_margin_ppm: z.number().int().min(0).max(1_000_000),
+    factors: z.array(RuntimeDecisionFactorSchema).min(1).max(20),
+    reason_codes: z.array(z.string().min(1).max(100)).min(3).max(4),
+    authority: z.literal('human_approval_required'),
+    approval_granted: z.literal(false),
+    execution_performed: z.literal(false),
+  }).strict().optional(),
   approval_target: PreparationApprovalTargetSchema,
   resume: z.object({
     method: z.literal('POST'),
@@ -322,6 +432,49 @@ export const NigmaHostPreparationResultSchema = z.object({
   evidence: z.array(z.string().min(1).max(500)).min(1).max(20),
 }).strict();
 export type NigmaHostPreparationResult = z.infer<typeof NigmaHostPreparationResultSchema>;
+
+function projectRuntimeDecision(
+  explanation: RuntimeDecisionExplanation | undefined,
+  runtime: z.infer<typeof NigmaEducationalPreparationUpstreamSchema>['integration_plan']['runtime_selection'],
+): NigmaHostPreparationResult['runtime_decision'] {
+  if (!explanation) return undefined;
+  const { id: _id, digest: _digest, ...payload } = explanation;
+  const expectedDigest = sha256(canonicalJson(payload));
+  const integrityMatches = explanation.digest === expectedDigest
+    && explanation.id === `runtime-decision-explanation-${expectedDigest.slice(0, 16)}`;
+  const linksMatch = explanation.selection_id === runtime.id
+    && explanation.selection_digest === runtime.digest
+    && explanation.selected.runtime_id === runtime.selected_runtime_id
+    && explanation.selected.runtime_version === runtime.selected_runtime_version
+    && explanation.selected.snapshot_id === runtime.selected_snapshot_id
+    && explanation.selected.snapshot_digest === runtime.selected_snapshot_digest;
+  if (!integrityMatches || !linksMatch) {
+    throw new NigmaHostError(
+      'NIGMA_RUNTIME_EXPLANATION_INVALID', 502,
+      'Nigma runtime explanation failed integrity or selection binding',
+    );
+  }
+  return {
+    explanation_id: explanation.id,
+    explanation_digest: explanation.digest,
+    selection_id: explanation.selection_id,
+    selection_digest: explanation.selection_digest,
+    selected_score_ppm: explanation.selected.total_score_ppm,
+    selected_evidence_basis: explanation.selected.evidence_basis,
+    runner_up: explanation.runner_up ? {
+      runtime_id: explanation.runner_up.runtime_id,
+      runtime_version: explanation.runner_up.runtime_version,
+      total_score_ppm: explanation.runner_up.total_score_ppm,
+      evidence_basis: explanation.runner_up.evidence_basis,
+    } : null,
+    score_margin_ppm: explanation.score_margin_ppm,
+    factors: explanation.factors,
+    reason_codes: explanation.reason_codes,
+    authority: explanation.authority,
+    approval_granted: false,
+    execution_performed: false,
+  };
+}
 
 const NigmaRuntimeFallbackUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-runtime-fallback/v1'),
@@ -680,6 +833,7 @@ export async function prepareNigmaEducationalTask(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
+    runtime_decision: projectRuntimeDecision(prepared.runtime_explanation, runtime),
     approval_target: approval,
     resume: {
       method: 'POST',
@@ -794,6 +948,7 @@ function projectFallbackPreparation(
       snapshot_id: runtime.selected_snapshot_id,
       snapshot_digest: runtime.selected_snapshot_digest,
     },
+    runtime_decision: projectRuntimeDecision(prepared.runtime_explanation, runtime),
     approval_target: approval,
     resume: { method: 'POST', path: '/v1/runtime/nigma/host-runs', plan_id: plan.id },
     approval_granted: false,

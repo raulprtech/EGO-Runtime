@@ -20,6 +20,14 @@ Content-Type: application/json
 
 The response uses `nigma.host-preparation/v1` and contains a compact plan/runtime summary, the exact plan/route/plugin/provider approval target and the fixed `/v1/runtime/nigma/host-runs` resume path. It is always `awaiting_human_approval`; EGO has no endpoint that records the decision. A trusted actor must submit the exact approval to Nigma separately. Calling the resume endpoint before that decision, after expiry or after any sealed-link change fails before runtime routing.
 
+G1.5 optionally adds `runtime_decision`: selected and runner-up scores in integer
+millionths, their margin, factor deltas, evidence basis and bounded reason codes.
+EGO recalculates Nigma's explanation digest and verifies its exact selection and
+snapshot links before projecting it. Historical preparations without the field
+remain valid; an altered present explanation fails with 502. The projection is
+always marked `human_approval_required`, `approval_granted=false` and
+`execution_performed=false`.
+
 This endpoint never creates an approval and never accepts an invocation supplied by the caller:
 
 ```http
