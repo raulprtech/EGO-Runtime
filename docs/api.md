@@ -10,6 +10,9 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `POST /approval-digest` — normalize a request and return the SHA-256 digest to approve.
 - `GET /capabilities` — backward-compatible capability summary; new discovery clients should use `manifest`.
 - `POST /execute` — create or safely redispatch an idempotent job.
+- `POST /materials` — stage one authenticated binary learning material under `LOCAL_INPUT_ROOT`; requires encoded name/owner, media type and `Idempotency-Key` headers.
+- `GET /materials/:material_id` — recover and integrity-check an owner-bound active record or released tombstone.
+- `DELETE /materials/:material_id` — remove material bytes idempotently while retaining a sealed release tombstone; it never approves or executes.
 - `POST /nigma/invocations` — validate an approved Nigma route against the runtime-owned allow-list and submit it.
 - `POST /nigma/educational-tasks/prepare` — obtain a verified pre-approval plan view as JSON, or its generic interface events with explicit `Accept: text/event-stream`.
 - `POST /nigma/human-approvals` — record an exact, separately authenticated human approval for a persisted sealed preparation; never execute it.

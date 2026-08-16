@@ -40,6 +40,15 @@ npm run demo
 
 Local state and generated artifacts are written under `.ego-runtime/`. Inputs must be inside `LOCAL_INPUT_ROOT`; symlinks and paths that escape that root are rejected.
 
+G1.19 adds authenticated runtime-owned material staging. A relay can stream one
+PDF, plain-text, Markdown or JSON source to `POST /v1/runtime/materials`; EGO
+stores bytes and an integrity record with owner-only permissions inside
+`LOCAL_INPUT_ROOT`, returns a bounded `file://` reference plus hash and size,
+and retains only a hashed owner reference. Reads survive restart. Explicit
+release removes the bytes idempotently and retains a sealed tombstone. Storage
+that cannot enforce `0700/0600` permissions fails closed. See the
+[G1.19 result](docs/g1.19-portable-material-staging-result-2026-08-16.md).
+
 Assessment requests may declare a BCP47 language. The runtime returns the declared language, bounded per-question scores and updated mastery. Raw learner responses are used transiently for grading but are not retained in local or Firestore attempt records; durable state contains only response count, digest, scores and mastery.
 
 The credential-free provider uses the versioned `deterministic-bilingual-v1` assessment baseline. Results include matched/missing elements and explicit mastery, partial-match, uncertainty or insufficient-evidence reasons. Its reviewed Spanish/English aliases cover the current Nigma demonstration only; this deterministic fallback is not an open-domain semantic grader.
