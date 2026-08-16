@@ -602,10 +602,42 @@ export const NigmaTrustedConversationDecisionResultSchema = z.object({
   authority: z.literal('trusted_conversation_adapter'),
   approval_recorded: z.literal(true),
   execution_performed: z.literal(false),
+  execution_authorization: z.object({
+    protocol_version: z.literal('nigma.conversation-execution-authorization/v1'),
+    phrase: z.string().min(1).max(1000),
+    phrase_sha256: Digest,
+    plan_id: BoundedId,
+    plan_digest: Digest,
+    approval_id: BoundedId,
+    approval_digest: Digest,
+    expires_at: z.iso.datetime(),
+    human_action_required: z.literal(true),
+    execution_performed: z.literal(false),
+  }).strict(),
   digest: Digest,
 }).strict();
 export type NigmaTrustedConversationDecisionResult = z.infer<
   typeof NigmaTrustedConversationDecisionResultSchema
+>;
+
+export const NigmaTrustedConversationExecutionRequestSchema = z.object({
+  protocol_version: z.literal('nigma.trusted-conversation-execution/v1'),
+  host_preparation_id: BoundedId,
+  interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  interface_projection_digest: Digest,
+  approval_id: BoundedId,
+  approval_digest: Digest,
+  turn: z.object({
+    role: z.literal('user'),
+    origin: z.literal('externally_authenticated_human'),
+    conversation_ref: BoundedId,
+    message_ref: BoundedId,
+    observed_at: z.iso.datetime(),
+    content: z.string().min(1).max(1000),
+  }).strict(),
+}).strict();
+export type NigmaTrustedConversationExecutionRequest = z.infer<
+  typeof NigmaTrustedConversationExecutionRequestSchema
 >;
 
 type TrustedConversationSource = {
@@ -1060,6 +1092,7 @@ export async function recordTrustedNigmaConversationDecision(
     approver: submission.approver,
     expires_at: submission.expires_at,
   }, idempotencyKey, source);
+  const executionPhrase = `Ejecuta plan ${approval.plan_id} digest ${approval.plan_digest}, aprobación ${approval.approval_id} digest ${approval.digest}.`;
   const provisional = {
     protocol_version: 'nigma.trusted-conversation-decision-record/v1' as const,
     ...source,
@@ -1067,6 +1100,18 @@ export async function recordTrustedNigmaConversationDecision(
     authority: 'trusted_conversation_adapter' as const,
     approval_recorded: true as const,
     execution_performed: false as const,
+    execution_authorization: {
+      protocol_version: 'nigma.conversation-execution-authorization/v1' as const,
+      phrase: executionPhrase,
+      phrase_sha256: sha256(executionPhrase),
+      plan_id: approval.plan_id,
+      plan_digest: approval.plan_digest,
+      approval_id: approval.approval_id,
+      approval_digest: approval.digest,
+      expires_at: approval.expires_at,
+      human_action_required: true as const,
+      execution_performed: false as const,
+    },
   };
   return NigmaTrustedConversationDecisionResultSchema.parse({
     ...provisional,

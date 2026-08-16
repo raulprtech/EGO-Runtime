@@ -378,6 +378,13 @@ describe('trusted Nigma human approval bridge', () => {
       authority: 'trusted_conversation_adapter',
       approval_recorded: true,
       execution_performed: false,
+      execution_authorization: {
+        protocol_version: 'nigma.conversation-execution-authorization/v1',
+        plan_id: 'plan-approval-1',
+        approval_id: 'approval-record-1',
+        human_action_required: true,
+        execution_performed: false,
+      },
       approval: {
         protocol_version: 'nigma.trusted-human-approval-record/v1',
         approval_recorded: true,
@@ -427,7 +434,7 @@ describe('trusted Nigma human approval bridge', () => {
       id: 'nigma-approval:approval-record-1',
       type: 'background',
       title: 'Aprobación registrada',
-      content: 'Nigma registró tu aprobación. La ejecución no comenzó; requiere un paso separado.',
+      content: `Nigma registró tu aprobación. La ejecución no comenzó. Para iniciarla envía exactamente: ${conversationResult.execution_authorization.phrase}`,
       timestamp: Date.parse('2026-08-15T00:15:00Z'),
     }] });
     const otherProfileResponse = await fetch(`${eventsEndpoint}?profile=other`, {
@@ -443,6 +450,50 @@ describe('trusted Nigma human approval bridge', () => {
     const storedDecisionEvent = await fs.readFile(decisionEventFile, 'utf8');
     expect(storedDecisionEvent).not.toContain('"aria"');
     expect(storedDecisionEvent).toContain('"execution_performed": false');
+    const executionChallengeFiles = await fs.readdir(
+      path.join(localData, 'nigma-execution-challenges'),
+    );
+    expect(executionChallengeFiles).toHaveLength(1);
+    const executionChallengeFile = path.join(
+      localData, 'nigma-execution-challenges', executionChallengeFiles[0],
+    );
+    const executionChallengeText = await fs.readFile(executionChallengeFile, 'utf8');
+    expect((await fs.stat(executionChallengeFile)).mode & 0o777).toBe(0o600);
+    expect(executionChallengeText).not.toContain(
+      conversationResult.execution_authorization.phrase,
+    );
+    expect(executionChallengeText).not.toContain('aria-session-local-1');
+    expect(executionChallengeText).toContain(
+      conversationResult.execution_authorization.phrase_sha256,
+    );
+
+    const rejectedExecution = await fetch(
+      `${host.baseUrl}/v1/runtime/nigma/conversation-executions`,
+      {
+        method: 'POST',
+        headers: {
+          ...conversationHeaders,
+          'Idempotency-Key': 'conversation-execution-rejected-1',
+        },
+        body: JSON.stringify({
+          protocol_version: 'nigma.trusted-conversation-execution/v1',
+          host_preparation_id: preparation.host_preparation_id,
+          interface_projection_id: preparation.interface_projection.id,
+          interface_projection_digest: preparation.interface_projection.digest,
+          approval_id: conversationResult.approval.approval_id,
+          approval_digest: conversationResult.approval.digest,
+          turn: {
+            role: 'user',
+            origin: 'externally_authenticated_human',
+            conversation_ref: 'aria-session-local-1',
+            message_ref: 'aria-execution-message-rejected-1',
+            observed_at: new Date().toISOString(),
+            content: `${conversationResult.execution_authorization.phrase} alterada`,
+          },
+        }),
+      },
+    );
+    expect(rejectedExecution.status).toBe(409);
     await expect(fs.readdir(path.join(localData, 'nigma-host-runs')))
       .rejects.toMatchObject({ code: 'ENOENT' });
 

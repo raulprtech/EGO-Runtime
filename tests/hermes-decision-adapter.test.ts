@@ -108,6 +108,7 @@ function approvalResponse(body: Record<string, any>) {
     execution_performed: false,
   };
   const approval = { ...approvalCore, digest: sha256(canonicalJson(approvalCore)) };
+  const executionPhrase = `Ejecuta plan ${approval.plan_id} digest ${approval.plan_digest}, aprobación ${approval.approval_id} digest ${approval.digest}.`;
   const core = {
     protocol_version: 'nigma.trusted-conversation-decision-record/v1',
     source_conversation_ref_sha256: sha256(`conversation:${body.turn.conversation_ref}`),
@@ -117,6 +118,18 @@ function approvalResponse(body: Record<string, any>) {
     authority: 'trusted_conversation_adapter',
     approval_recorded: true,
     execution_performed: false,
+    execution_authorization: {
+      protocol_version: 'nigma.conversation-execution-authorization/v1',
+      phrase: executionPhrase,
+      phrase_sha256: sha256(executionPhrase),
+      plan_id: approval.plan_id,
+      plan_digest: approval.plan_digest,
+      approval_id: approval.approval_id,
+      approval_digest: approval.digest,
+      expires_at: approval.expires_at,
+      human_action_required: true,
+      execution_performed: false,
+    },
   };
   return { ...core, digest: sha256(canonicalJson(core)) };
 }

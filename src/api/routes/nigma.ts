@@ -15,6 +15,7 @@ import {
   NigmaPresentationLocaleSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
+  NigmaTrustedConversationExecutionRequestSchema,
   NigmaTrustedConversationDecisionRequestSchema,
   NigmaTrustedHumanApprovalRequestSchema,
   getNigmaHostRunEvents,
@@ -29,8 +30,11 @@ import {
 import { getRuntimeRepository } from '../../services/runtime_repository';
 import { TaskQueue } from '../../services/task_queue';
 import {
+  authorizeNigmaConversationExecution,
   listNigmaDecisionEvents,
+  NigmaConversationExecutionError,
   recordNigmaConversationDecisionEvent,
+  recordNigmaConversationExecutionEvent,
 } from '../../runtime/nigma_decision_events';
 
 const router = Router();
@@ -98,6 +102,33 @@ router.post(
       );
       return res.json(result);
     } catch (error) {
+      if (error instanceof NigmaHostError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
+      if (error instanceof ZodError) return next(error);
+      return next(error);
+    }
+  },
+);
+
+router.post(
+  '/conversation-executions',
+  authMiddleware,
+  humanDecisionMiddleware,
+  async (req, res, next) => {
+    try {
+      const submission = NigmaTrustedConversationExecutionRequestSchema.parse(req.body);
+      const profile = req.header('X-Interface-Profile') ?? 'default';
+      const authority = await authorizeNigmaConversationExecution(submission, profile);
+      const result = await runApprovedNigmaPlan({
+        plan_id: authority.challenge.plan_id,
+        learner_context: authority.learner_context,
+      }, authority.idempotency_key);
+      return res.json(await recordNigmaConversationExecutionEvent(authority, result, profile));
+    } catch (error) {
+      if (error instanceof NigmaConversationExecutionError) {
+        return res.status(error.status).json({ error: error.code, message: error.message });
+      }
       if (error instanceof NigmaHostError) {
         return res.status(error.status).json({ error: error.code, message: error.message });
       }

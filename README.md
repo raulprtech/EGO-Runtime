@@ -62,6 +62,16 @@ G1.14 validates that path with the real continuous ARIA thread: one fresh
 approval, one deterministic mobile event and zero executions, invocations or
 runtime receipts. See the [G1.14 result](docs/g1.14-real-aria-decision-feedback-result-2026-08-15.md).
 
+G1.15 introduces a separate exact-turn execution authority. A verified
+conversation approval now creates an owner-only execution challenge and tells
+the user the exact second phrase required to resume the already-approved plan.
+`POST /v1/runtime/nigma/conversation-executions` accepts only that later
+human turn from the same profile and conversation, derives privacy-safe learner
+references, and uses one fixed idempotency identity per approval. Nigma still
+revalidates approval before issuing an invocation, and ARIA receives a separate
+terminal informational receipt. The Hermes supervisor integration of this
+second turn remains G1.16. See the [G1.15 result](docs/g1.15-explicit-conversation-execution-authority-result-2026-08-15.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.

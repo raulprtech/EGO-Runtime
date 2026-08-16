@@ -14,7 +14,8 @@ All endpoints except `manifest` and the legacy `capabilities` endpoint require t
 - `POST /nigma/educational-tasks/prepare` — obtain a verified pre-approval plan view as JSON, or its generic interface events with explicit `Accept: text/event-stream`.
 - `POST /nigma/human-approvals` — record an exact, separately authenticated human approval for a persisted sealed preparation; never execute it.
 - `POST /nigma/conversation-decisions` — map one externally authenticated human `user` turn to the exact approval adapter; model/tool roles cannot use it.
-- `GET /nigma/decision-events?profile=aria&limit=20` — read bounded, profile-scoped informational receipts for decisions already recorded; it cannot approve or execute.
+- `POST /nigma/conversation-executions` — accept a separately authenticated second exact human turn and resume only its sealed, already-approved plan.
+- `GET /nigma/decision-events?profile=aria&limit=20` — read bounded, profile-scoped informational receipts for decisions and terminal executions already recorded; it cannot approve or execute.
 - `POST /nigma/host-runs` — request an already-approved Nigma invocation, execute its exact runtime route and return the terminal receipt.
 - `GET /nigma/host-runs/:host_run_id` — read a sealed durable host-run state and content-free artifact references.
 - `GET /nigma/host-runs/:host_run_id/events?after=N` — read ordered host events after a bounded cursor.
@@ -78,13 +79,40 @@ skew. EGO hashes both opaque references with domain separation, forwards only
 those hashes and seals `nigma.trusted-conversation-decision-record/v1`. Raw
 conversation IDs, message IDs and message content are not retained in Nigma.
 The result records approval only and always has `execution_performed=false`.
-After that verified result, EGO also persists one idempotent, integrity-sealed
-`nigma.decision-event/v1` under the interface profile supplied by the trusted
+It also returns a separately bound `execution_authorization` whose exact phrase
+must be supplied by a later human turn. After the verified result, EGO persists
+one idempotent, integrity-sealed `nigma.decision-event/v2` and an owner-only
+execution challenge under the interface profile supplied by the trusted
 sidecar. `GET /nigma/decision-events` returns only `id`, `type`, `title`,
 `content` and millisecond `timestamp`. It requires the runtime bearer but never
 the human-decision credential because it is a read-only projection of completed
 authority, not an authority endpoint. The durable record retains profile and
 conversation references only as domain-separated SHA-256 values.
+
+Existing `nigma.decision-event/v1` files remain readable and are never
+rewritten. The v2 event explicitly states that execution has not begun and
+contains the exact phrase required for the separate action.
+
+## Trusted conversation execution
+
+`POST /nigma/conversation-executions` requires both the normal runtime bearer
+and the independent `X-Nigma-Human-Decision-Token`. Its
+`nigma.trusted-conversation-execution/v1` body binds the original host
+preparation, interface projection, approval identity/digest and exactly one
+later externally authenticated human `user` turn.
+
+EGO reloads the owner-only `0600` execution challenge and requires the same
+interface profile and conversation, byte-exact phrase content, valid approval
+window and bounded observation time. Raw phrase and conversation references
+are not stored in the challenge. Learner identifiers are derived from
+domain-separated hashes, and the host-run idempotency key is fixed by the
+sealed approval challenge so repeated delivery cannot create another run.
+
+Only after those checks does EGO call the existing host-run path. Nigma then
+independently revalidates the approval before issuing an invocation. A terminal
+result produces `nigma.trusted-conversation-execution-record/v1` and one
+profile-scoped `Ejecución finalizada` event. The read-only event feed itself
+still cannot start execution.
 
 ## Runtime manifest
 
