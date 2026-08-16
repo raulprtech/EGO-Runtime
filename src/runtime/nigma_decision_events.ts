@@ -275,7 +275,7 @@ export async function recordNigmaConversationDecisionEvent(
     execution_phrase_sha256: authorization.phrase_sha256,
     type: 'background',
     title: 'Aprobación registrada',
-    content: `Nigma registró tu aprobación. La ejecución no comenzó. Para iniciarla envía exactamente: ${authorization.phrase}`,
+    content: `Plan aprobado. La tarea aún no comenzó. Para iniciarla, responde exactamente: ${authorization.phrase}`,
     timestamp: Date.parse(result.approval.created_at),
     execution_performed: false,
   });
@@ -376,7 +376,7 @@ export async function recordNigmaConversationExecutionEvent(
     host_run_status: result.status,
     type: 'background',
     title: 'Ejecución finalizada',
-    content: `Nigma finalizó la ejecución con estado ${result.status}.`,
+    content: executionContent(result.status),
     timestamp: Date.parse(result.events.at(-1)?.occurred_at ?? observedAt),
     execution_performed: true,
   }));
@@ -407,11 +407,25 @@ export async function listNigmaDecisionEvents(
 }
 
 function project(event: AuthorityEvent): NigmaDecisionEventProjection {
+  const legacyApproval = event.protocol_version === 'nigma.decision-event/v1'
+    || (event.protocol_version === 'nigma.decision-event/v2'
+      && event.content.startsWith('Nigma registró'));
   return {
     id: event.id,
     type: event.type,
     title: event.title,
-    content: event.content,
+    content: legacyApproval
+      ? 'La aprobación quedó registrada. La tarea no comenzó.'
+      : event.protocol_version === 'nigma.execution-event/v1'
+        ? executionContent(event.host_run_status)
+        : event.content,
     timestamp: event.timestamp,
   };
+}
+
+function executionContent(status: 'succeeded' | 'failed' | 'cancelled' | 'timed_out'): string {
+  if (status === 'succeeded') return 'La tarea terminó correctamente.';
+  if (status === 'cancelled') return 'La tarea fue cancelada.';
+  if (status === 'timed_out') return 'La tarea superó el tiempo permitido.';
+  return 'La tarea no pudo completarse.';
 }

@@ -5,6 +5,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../server';
 import { canonicalJson, sha256 } from '../src/runtime/integrity';
+import {
+  NigmaAdapterPolicySchema, setNigmaAdapterPolicyForTests,
+} from '../src/runtime/nigma_handoff';
+import {
+  NigmaHostRoutesSchema, setNigmaHostRoutesForTests,
+} from '../src/runtime/nigma_host';
 
 async function listen(app: express.Express) {
   const server = app.listen(0, '127.0.0.1');
@@ -145,6 +151,24 @@ function nigmaPreparation(includeExplanation = true) {
   };
 }
 
+function adapterPolicy(capabilities: string[]) {
+  return NigmaAdapterPolicySchema.parse({
+    protocol_version: 'nigma.runtime-handoff/v1',
+    runtime_id: 'ego-runtime',
+    runtime_version: '0.9.0',
+    allowed_nigma_capabilities: capabilities,
+    allowed_permissions: [],
+    allowed_output_types: ['study_plan'],
+    plugins: [{
+      snapshot_id: 'study-plugin@1.0.0',
+      snapshot_digest: digest('6'),
+      runtime_capabilities: ['education.study_plan'],
+    }],
+    providers: [],
+    bindings: [],
+  });
+}
+
 describe('Nigma educational host preparation', () => {
   const closers: Array<() => Promise<void>> = [];
   const directories: string[] = [];
@@ -155,7 +179,10 @@ describe('Nigma educational host preparation', () => {
     for (const name of [
       'INTERNAL_RUNTIME_TOKEN', 'NIGMA_CONTROL_PLANE_URL',
       'NIGMA_CONTROL_PLANE_API_KEY', 'NIGMA_HOST_TIMEOUT_MS', 'LOCAL_DATA_DIR',
+      'NIGMA_HANDOFF_ENABLED', 'NIGMA_RUNTIME_TOKEN_EGO',
     ]) delete process.env[name];
+    setNigmaAdapterPolicyForTests(undefined);
+    setNigmaHostRoutesForTests(undefined);
   });
 
   async function runtimeFor(control: express.Express) {
@@ -232,8 +259,8 @@ describe('Nigma educational host preparation', () => {
         approval_recorded: false,
         execution_performed: false,
         events: [
-          { event: 'tool.started', data: { tool_name: 'nigma.plan', status: 'started' } },
-          { event: 'tool.completed', data: { tool_name: 'nigma.plan', status: 'completed' } },
+          { event: 'tool.started', data: { tool_name: 'learning.plan', status: 'started' } },
+          { event: 'tool.completed', data: { tool_name: 'learning.plan', status: 'completed' } },
           { event: 'assistant.completed', data: { completed: true } },
         ],
       },
@@ -264,6 +291,10 @@ describe('Nigma educational host preparation', () => {
     expect(projection.source_host_preparation_id).toBe(result.host_preparation_id);
     expect(projection.source_presentation_digest).toBe(presentation.digest);
     expect(projection.events[2].data.content).toContain(projection.approval_phrase);
+    expect(projection.approval_phrase).toBe('Confirmo el plan BBBBBB.');
+    expect(projection.events[2].data.content).not.toContain('Nigma');
+    expect(projection.events[2].data.content).not.toContain('plan-1');
+    expect(projection.events[2].data.content).not.toContain(digest('b'));
   });
 
   it('renders a separate deterministic English presentation', async () => {
@@ -318,6 +349,56 @@ describe('Nigma educational host preparation', () => {
     expect(result.interface_projection.id).not.toBe(spanish.interface_projection.id);
   });
 
+  it('rejects a configured capability gap before creating a human challenge', async () => {
+    const control = express();
+    control.use(express.json());
+    control.post('/educational-tasks/prepare', (_req, res) => res.json(nigmaPreparation()));
+    process.env.NIGMA_HANDOFF_ENABLED = 'true';
+    process.env.NIGMA_RUNTIME_TOKEN_EGO = 'preflight-runtime-token';
+    setNigmaAdapterPolicyForTests(adapterPolicy(['educational_execution']));
+    setNigmaHostRoutesForTests(NigmaHostRoutesSchema.parse({
+      protocol_version: 'nigma.host-routes/v1',
+      routes: [{
+        runtime_id: 'ego-runtime',
+        runtime_version: '0.9.0',
+        base_url: 'http://127.0.0.1:9/v1/runtime',
+        credential_env: 'NIGMA_RUNTIME_TOKEN_EGO',
+      }],
+    }));
+    const runtime = await runtimeFor(control);
+    const input = {
+      ...task(),
+      required_runtime_capabilities: ['educational_execution', 'assessment'],
+    };
+    const rejected = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      { method: 'POST', headers, body: JSON.stringify(input) },
+    );
+    expect(rejected.status).toBe(422);
+    await expect(rejected.json()).resolves.toMatchObject({
+      error: 'NIGMA_PREFLIGHT_CAPABILITY_NOT_ALLOWED',
+      message: expect.stringContaining('assessment'),
+    });
+    const challengeDirectory = path.join(
+      directories.at(-1)!, 'nigma-human-approval-challenges',
+    );
+    await expect(fs.readdir(challengeDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    setNigmaAdapterPolicyForTests(adapterPolicy([
+      'educational_execution', 'assessment',
+    ]));
+    const accepted = await fetch(
+      `${runtime.baseUrl}/v1/runtime/nigma/educational-tasks/prepare`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'Idempotency-Key': 'preflight-repaired' },
+        body: JSON.stringify(input),
+      },
+    );
+    expect(accepted.status, await accepted.clone().text()).toBe(200);
+    expect(await fs.readdir(challengeDirectory)).toHaveLength(1);
+  });
+
   it('renders the sealed preparation as generic SSE accepted by the ARIA parser contract', async () => {
     const control = express();
     control.use(express.json());
@@ -347,10 +428,12 @@ describe('Nigma educational host preparation', () => {
       'tool.started', 'tool.completed', 'assistant.completed',
     ]);
     expect(frames[0].data.tool_call_id).toBe(frames[1].data.tool_call_id);
-    expect(frames[1].data.tool_name).toBe('nigma.plan');
+    expect(frames[1].data.tool_name).toBe('learning.plan');
     expect(frames[2].data.completed).toBe(true);
-    expect(frames[2].data.content).toContain('Advantages:');
-    expect(frames[2].data.content).toContain('Apruebo plan plan-1 digest');
+    expect(frames[2].data.content).toContain('Plan ready for review');
+    expect(frames[2].data.content).toContain('I confirm plan BBBBBB.');
+    expect(frames[2].data.content).not.toContain('Nigma');
+    expect(frames[2].data.content).not.toContain('plan-1');
   });
 
   it('accepts a historical preparation without the optional explanation', async () => {

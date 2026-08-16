@@ -136,7 +136,7 @@ describe('trusted conversation execution authority', () => {
       id: core.id,
       type: core.type,
       title: core.title,
-      content: core.content,
+      content: 'La aprobación quedó registrada. La tarea no comenzó.',
       timestamp: core.timestamp,
     }]);
   });

@@ -1,9 +1,16 @@
 # Hermes conversation decision and execution sidecar
 
-The G1.10–G1.16 sidecar connects an authenticated Hermes conversation to EGO's
+The G1.10–G1.17 sidecar connects an authenticated Hermes conversation to EGO's
 neutral human-decision and execution ports. It is a trusted deployment adapter,
 not a model tool and not an ARIA backend. It first records an explicit
 approval, then requires a separate exact human turn before execution.
+
+Current preparations present short product-neutral phrases such as
+`Confirmo el plan A1B2C3.` and `Inicia el plan A1B2C3.`. The six-character
+code is derived deterministically from the sealed plan digest. Plan UUIDs,
+digests, runtime names and selection scores remain in audit evidence rather
+than ordinary learner messages. Historical bindings keep their original
+phrase hashes and continue to verify under their versioned contract.
 
 ## Trust boundary
 
@@ -11,6 +18,9 @@ approval, then requires a separate exact human turn before execution.
 - The sidecar owns the Hermes API key, EGO runtime token and independent Nigma
   human-decision token. None may enter model context or a mobile bundle.
 - EGO validates the exact sealed preparation, phrase and presentation window.
+- Before creating a challenge, EGO verifies that the configured local policy
+  admits the selected runtime, every requested capability, its route and its
+  credential. A mismatch fails before the user is asked to approve.
 - Nigma records the approval. A later, separate exact human turn must request execution.
 - EGO records a profile-scoped informational receipt after Nigma confirms the
   approval. ARIA may read that receipt through its relay, but it cannot use the
@@ -116,6 +126,11 @@ timeout, 429 and 5xx failures may retry; authentication, contract, integrity,
 profile, ambiguity and authority failures stop immediately. The approval
 supervisor persists only terminal `recorded` or `expired` bindings.
 Restarting either state performs no approval call.
+
+An HTTP 401 is classified as invalid credentials only when the structured
+upstream error explicitly reports authentication failure. A structured host
+or runtime rejection that also uses 401 remains `UPSTREAM_REJECTED`, preserving
+its sanitized reason for diagnosis instead of misreporting the API key.
 
 ## Scan or supervise the separate execution turn
 

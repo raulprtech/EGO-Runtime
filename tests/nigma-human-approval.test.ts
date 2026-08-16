@@ -434,9 +434,10 @@ describe('trusted Nigma human approval bridge', () => {
       id: 'nigma-approval:approval-record-1',
       type: 'background',
       title: 'Aprobación registrada',
-      content: `Nigma registró tu aprobación. La ejecución no comenzó. Para iniciarla envía exactamente: ${conversationResult.execution_authorization.phrase}`,
+      content: `Plan aprobado. La tarea aún no comenzó. Para iniciarla, responde exactamente: ${conversationResult.execution_authorization.phrase}`,
       timestamp: Date.parse('2026-08-15T00:15:00Z'),
     }] });
+    expect(conversationResult.execution_authorization.phrase).toBe('Inicia el plan BBBBBB.');
     const otherProfileResponse = await fetch(`${eventsEndpoint}?profile=other`, {
       headers: { Authorization: `Bearer ${runtimeToken}` },
     });

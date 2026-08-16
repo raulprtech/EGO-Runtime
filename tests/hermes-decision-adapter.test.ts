@@ -529,6 +529,40 @@ describe('Hermes trusted-decision sidecar', () => {
     expect(replayCall).not.toHaveBeenCalled();
   });
 
+  it('distinguishes a structured host rejection from invalid credentials', async () => {
+    const approved = await recordedBinding();
+    const messages = { data: [{
+      id: 'execution-message-rejected',
+      role: 'user',
+      content: approved.executionPhrase,
+    }] };
+    const rejected = vi.fn(async () => new Response(JSON.stringify({
+      error: 'NIGMA_HOST_UPSTREAM_REJECTED',
+      message: 'Selected runtime rejected the request',
+    }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    await expect(scanHermesExecutionBinding(
+      approved.binding, 'hermes-session-1', messages, config(),
+      new Date('2026-08-15T18:10:00Z'), rejected as unknown as typeof fetch,
+    )).rejects.toMatchObject({
+      code: 'UPSTREAM_REJECTED',
+      message: expect.stringContaining('NIGMA_HOST_UPSTREAM_REJECTED'),
+    });
+
+    const unauthorized = vi.fn(async () => new Response(JSON.stringify({
+      error: 'Human decision unauthorized',
+    }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    await expect(scanHermesExecutionBinding(
+      approved.binding, 'hermes-session-1', messages, config(),
+      new Date('2026-08-15T18:10:00Z'), unauthorized as unknown as typeof fetch,
+    )).rejects.toMatchObject({ code: 'UPSTREAM_AUTH_FAILED' });
+  });
+
   it('reads historical v2 bindings but refuses to infer execution authority', async () => {
     const current = binding();
     const { binding_digest: _digest, execution: _execution, ...core } = current;

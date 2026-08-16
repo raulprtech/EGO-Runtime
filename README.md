@@ -81,6 +81,17 @@ deterministic runtime execution and receipt; replay after restart made no
 upstream call. ARIA and the real G1.14 plan remain untouched. See the
 [G1.16 result](docs/g1.16-hermes-execution-supervisor-result-2026-08-15.md).
 
+G1.17 validates that path with the installed Hermes `aria` profile, fresh
+isolated Nigma/EGO processes and a harmless deterministic learning task. The
+first real attempt failed closed because EGO's local policy omitted
+`assessment`; the repaired policy completed one host run with eight lifecycle
+events, four hash-verified artifacts, one receipt and one experience record.
+Offline replay made no upstream call. EGO now preflights configured runtime
+capabilities before asking for human approval, distinguishes structured host
+rejections from bad credentials and projects short product-neutral approval
+messages while retaining complete internal audit evidence. See the
+[G1.17 result](docs/g1.17-real-hermes-deterministic-execution-result-2026-08-15.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.

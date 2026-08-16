@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import {
+  getNigmaAdapterPolicy,
+  isNigmaHandoffConfigured,
+  NigmaHandoffError,
   NigmaInvocationEnvelopeSchema,
   type NigmaInvocationEnvelope,
 } from './nigma_handoff';
@@ -360,7 +363,7 @@ const RuntimeDecisionPresentationSchema = RuntimeDecisionPresentationCoreSchema.
 
 const PreparationInterfaceToolDataSchema = z.object({
   tool_call_id: BoundedId,
-  tool_name: z.literal('nigma.plan'),
+  tool_name: z.enum(['nigma.plan', 'learning.plan']),
   status: z.enum(['started', 'completed']),
   message: z.string().min(1).max(500),
   plan_id: BoundedId,
@@ -584,6 +587,7 @@ export const NigmaTrustedHumanApprovalResultSchema = z.object({
   source_interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
   source_interface_projection_digest: Digest,
   approval_phrase_sha256: Digest,
+  presentation_locale: NigmaPresentationLocaleSchema.optional(),
   authority: z.literal('trusted_human_adapter'),
   approval_recorded: z.literal(true),
   execution_performed: z.literal(false),
@@ -652,6 +656,7 @@ const NigmaHumanApprovalChallengeCoreSchema = z.object({
   interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
   interface_projection_digest: Digest,
   approval_phrase_sha256: Digest,
+  presentation_locale: NigmaPresentationLocaleSchema.optional(),
   approval_target: PreparationApprovalTargetSchema,
   created_at: z.iso.datetime(),
   expires_at: z.iso.datetime(),
@@ -802,8 +807,15 @@ function projectRuntimeDecision(
   };
 }
 
-function approvalPhrase(approval: z.infer<typeof PreparationApprovalTargetSchema>): string {
-  return `Apruebo plan ${approval.plan_id} digest ${approval.plan_digest}, ruta ${approval.agent_route_id} digest ${approval.agent_route_digest}, alcance execute.`;
+function publicPlanCode(planDigest: string): string {
+  return Digest.parse(planDigest).slice(0, 6).toUpperCase();
+}
+
+function approvalPhrase(
+  approval: z.infer<typeof PreparationApprovalTargetSchema>, locale: PresentationLocale,
+): string {
+  const code = publicPlanCode(approval.plan_digest);
+  return locale === 'es-MX' ? `Confirmo el plan ${code}.` : `I confirm plan ${code}.`;
 }
 
 function buildPreparationInterfaceProjection(
@@ -815,39 +827,21 @@ function buildPreparationInterfaceProjection(
 ): z.infer<typeof PreparationInterfaceProjectionSchema> {
   const presentation = decision.presentation;
   const locale = presentation.locale;
-  const exactPhrase = approvalPhrase(approval);
-  const advantages = presentation.advantages.length
-    ? presentation.advantages.map(item => `- ${item.text}`).join('\n')
-    : (locale === 'es-MX' ? '- Ninguna ventaja diferencial registrada.' : '- No differential advantage recorded.');
-  const tradeoffs = presentation.tradeoffs.length
-    ? presentation.tradeoffs.map(item => `- ${item.text}`).join('\n')
-    : (locale === 'es-MX' ? '- Ningún compromiso diferencial registrado.' : '- No differential tradeoff recorded.');
-  const reasons = presentation.reason_texts.map(item => `- ${item}`).join('\n');
-  const confidence = localizedNumber(plan.confidence * 100, locale);
+  const exactPhrase = approvalPhrase(approval, locale);
   const content = locale === 'es-MX'
     ? [
-      presentation.title,
-      presentation.summary,
+      'Plan listo para revisión',
       `Objetivo: ${objective}`,
-      `Riesgo: ${plan.risk_level}. Confianza: ${confidence}%.`,
-      `Ventajas:\n${advantages}`,
-      `Compromisos:\n${tradeoffs}`,
-      `Motivos:\n${reasons}`,
-      'Para autorizar la ejecución, responde exactamente:',
+      'Preparé una ruta de trabajo usando únicamente los materiales autorizados. Nada comenzará sin tu confirmación.',
+      '¿Quieres que la ejecute? Responde exactamente:',
       exactPhrase,
-      presentation.disclaimer,
     ].join('\n\n')
     : [
-      presentation.title,
-      presentation.summary,
+      'Plan ready for review',
       `Objective: ${objective}`,
-      `Risk: ${plan.risk_level}. Confidence: ${confidence}%.`,
-      `Advantages:\n${advantages}`,
-      `Tradeoffs:\n${tradeoffs}`,
-      `Reasons:\n${reasons}`,
-      'To authorize execution, reply with this exact phrase:',
+      'I prepared a work path using only the authorized materials. Nothing will start without your confirmation.',
+      'Would you like me to run it? Reply exactly:',
       exactPhrase,
-      presentation.disclaimer,
     ].join('\n\n');
   const provisional = PreparationInterfaceProjectionCoreSchema.parse({
     protocol_version: 'nigma.host-preparation-interface/v1',
@@ -862,11 +856,11 @@ function buildPreparationInterfaceProjection(
         event: 'tool.started',
         data: {
           tool_call_id: hostPreparationId,
-          tool_name: 'nigma.plan',
+          tool_name: 'learning.plan',
           status: 'started',
           message: locale === 'es-MX'
-            ? 'Nigma está verificando el plan y la ruta.'
-            : 'Nigma is verifying the plan and route.',
+            ? 'Verificando el plan y la ruta.'
+            : 'Checking the plan and route.',
           plan_id: plan.id,
           plan_digest: plan.digest,
         },
@@ -875,9 +869,9 @@ function buildPreparationInterfaceProjection(
         event: 'tool.completed',
         data: {
           tool_call_id: hostPreparationId,
-          tool_name: 'nigma.plan',
+          tool_name: 'learning.plan',
           status: 'completed',
-          message: presentation.title,
+          message: locale === 'es-MX' ? 'Plan listo para revisión.' : 'Plan ready for review.',
           plan_id: plan.id,
           plan_digest: plan.digest,
         },
@@ -1057,6 +1051,7 @@ async function recordTrustedNigmaApproval(
     source_interface_projection_id: challenge.interface_projection_id,
     source_interface_projection_digest: challenge.interface_projection_digest,
     approval_phrase_sha256: phraseHash,
+    presentation_locale: challenge.presentation_locale,
     authority: 'trusted_human_adapter' as const,
     approval_recorded: true as const,
     execution_performed: false as const,
@@ -1092,7 +1087,10 @@ export async function recordTrustedNigmaConversationDecision(
     approver: submission.approver,
     expires_at: submission.expires_at,
   }, idempotencyKey, source);
-  const executionPhrase = `Ejecuta plan ${approval.plan_id} digest ${approval.plan_digest}, aprobación ${approval.approval_id} digest ${approval.digest}.`;
+  const planCode = publicPlanCode(approval.plan_digest);
+  const executionPhrase = approval.presentation_locale === 'en-US'
+    ? `Start plan ${planCode}.`
+    : `Inicia el plan ${planCode}.`;
   const provisional = {
     protocol_version: 'nigma.trusted-conversation-decision-record/v1' as const,
     ...source,
@@ -1309,6 +1307,7 @@ async function persistHumanApprovalChallenge(
       interface_projection_id: projection.id,
       interface_projection_digest: projection.digest,
       approval_phrase_sha256: sha256(projection.approval_phrase),
+      presentation_locale: projection.locale,
       approval_target: preparation.approval_target,
     };
     if (existing) {
@@ -1316,6 +1315,7 @@ async function persistHumanApprovalChallenge(
         interface_projection_id: existing.interface_projection_id,
         interface_projection_digest: existing.interface_projection_digest,
         approval_phrase_sha256: existing.approval_phrase_sha256,
+        presentation_locale: existing.presentation_locale,
         approval_target: existing.approval_target,
       };
       if (canonicalJson(existingIdentity) !== canonicalJson(identity)) {
@@ -1514,6 +1514,52 @@ function authHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 }
 
+async function preflightConfiguredNigmaHandoff(
+  request: NigmaEducationalPreparationRequest,
+  runtime: z.infer<typeof NigmaEducationalPreparationUpstreamSchema>['integration_plan']['runtime_selection'],
+): Promise<void> {
+  if (!isNigmaHandoffConfigured()) return;
+  let policy: Awaited<ReturnType<typeof getNigmaAdapterPolicy>>;
+  try {
+    policy = await getNigmaAdapterPolicy();
+  } catch (error) {
+    if (error instanceof NigmaHandoffError) {
+      throw new NigmaHostError(error.code, error.status, error.message);
+    }
+    throw error;
+  }
+  if (runtime.selected_runtime_id !== policy.runtime_id
+      || runtime.selected_runtime_version !== policy.runtime_version) {
+    throw new NigmaHostError(
+      'NIGMA_PREFLIGHT_RUNTIME_NOT_ALLOWED', 422,
+      'The selected runtime is not allowed by the configured local policy',
+    );
+  }
+  const allowed = new Set(policy.allowed_nigma_capabilities);
+  const missing = request.required_runtime_capabilities.filter(item => !allowed.has(item));
+  if (missing.length) {
+    throw new NigmaHostError(
+      'NIGMA_PREFLIGHT_CAPABILITY_NOT_ALLOWED', 422,
+      `The configured local policy does not allow: ${missing.join(', ')}`,
+    );
+  }
+  const routes = await loadRoutes();
+  const route = routes.routes.find(item => item.runtime_id === runtime.selected_runtime_id
+    && item.runtime_version === runtime.selected_runtime_version);
+  if (!route) {
+    throw new NigmaHostError(
+      'NIGMA_PREFLIGHT_RUNTIME_UNROUTABLE', 422,
+      'The selected runtime has no configured local route',
+    );
+  }
+  if (!process.env[route.credential_env]) {
+    throw new NigmaHostError(
+      'NIGMA_PREFLIGHT_RUNTIME_CREDENTIAL_UNAVAILABLE', 503,
+      'The selected runtime route has no configured credential',
+    );
+  }
+}
+
 
 export async function prepareNigmaEducationalTask(
   request: NigmaEducationalPreparationRequest,
@@ -1571,6 +1617,7 @@ export async function prepareNigmaEducationalTask(
       'Nigma preparation returned inconsistent sealed links',
     );
   }
+  await preflightConfiguredNigmaHandoff(request, runtime);
   const hostPreparationId = `host-preparation-${createHash('sha256')
     .update(`${plan.id}:${plan.digest}:${route.id}:${route.digest}:${presentationLocale}`)
     .digest('hex').slice(0, 32)}`;

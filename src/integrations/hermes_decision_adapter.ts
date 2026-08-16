@@ -477,7 +477,12 @@ async function responseJson(response: Response, label: string): Promise<unknown>
     throw new HermesDecisionAdapterError('UPSTREAM_RESPONSE_INVALID', `${label} returned invalid JSON`);
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
+    const detail = body && typeof body === 'object'
+      ? String((body as Record<string, unknown>).error ?? response.status)
+      : String(response.status);
+    const authenticationRejected = response.status === 401
+      && ['unauthorized', 'human decision unauthorized'].includes(detail.toLowerCase());
+    if (authenticationRejected) {
       throw new HermesDecisionAdapterError(
         'UPSTREAM_AUTH_FAILED', `${label} rejected the configured credential`,
       );
@@ -487,9 +492,6 @@ async function responseJson(response: Response, label: string): Promise<unknown>
         'UPSTREAM_TRANSIENT', `${label} is temporarily unavailable (${response.status})`,
       );
     }
-    const detail = body && typeof body === 'object'
-      ? String((body as Record<string, unknown>).error ?? response.status)
-      : String(response.status);
     throw new HermesDecisionAdapterError('UPSTREAM_REJECTED', `${label} rejected the request: ${detail}`);
   }
   return body;
