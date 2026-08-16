@@ -72,6 +72,15 @@ revalidates approval before issuing an invocation, and ARIA receives a separate
 terminal informational receipt. The Hermes supervisor integration of this
 second turn remains G1.16. See the [G1.15 result](docs/g1.15-explicit-conversation-execution-authority-result-2026-08-15.md).
 
+G1.16 makes that second authority operable through the replaceable Hermes
+sidecar. New v3 bindings seal the execution phrase only as a hash after
+approval; `execute-scan` and `execute-watch` accept only one later exact
+human turn, call the G1.15 port and lock as `executed` with content-free
+terminal evidence. An isolated HTTP golden completed one approval, invocation,
+deterministic runtime execution and receipt; replay after restart made no
+upstream call. ARIA and the real G1.14 plan remain untouched. See the
+[G1.16 result](docs/g1.16-hermes-execution-supervisor-result-2026-08-15.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.

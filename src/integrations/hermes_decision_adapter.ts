@@ -9,6 +9,7 @@ import {
   NigmaTrustedConversationDecisionResultSchema,
   PreparationInterfaceProjectionSchema,
 } from '../runtime/nigma_host';
+import { NigmaTrustedConversationExecutionResultSchema } from '../runtime/nigma_decision_events';
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
 const BoundedRef = z.string().min(1).max(300);
@@ -34,14 +35,25 @@ const BindingDecisionSchema = z.object({
   approval_digest: Digest,
   conversation_record_digest: Digest,
   recorded_at: z.iso.datetime(),
+  execution_phrase_sha256: Digest.optional(),
+  execution_expires_at: z.iso.datetime().optional(),
+}).strict();
+
+const BindingExecutionSchema = z.object({
+  source_message_ref_sha256: Digest,
+  host_run_id: z.string().regex(/^host-[a-f0-9]{32}$/),
+  host_run_status: z.enum(['succeeded', 'failed', 'cancelled', 'timed_out']),
+  execution_record_digest: Digest,
+  recorded_at: z.iso.datetime(),
 }).strict();
 
 const HermesDecisionBindingCoreSchema = z.object({
   protocol_version: z.enum([
     'nigma.hermes-conversation-binding/v1',
     'nigma.hermes-conversation-binding/v2',
+    'nigma.hermes-conversation-binding/v3',
   ]),
-  state: z.enum(['pending', 'recorded', 'expired']),
+  state: z.enum(['pending', 'recorded', 'executed', 'expired']),
   source_host_preparation_id: BoundedRef,
   source_interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
   source_interface_projection_digest: Digest,
@@ -54,21 +66,40 @@ const HermesDecisionBindingCoreSchema = z.object({
   hermes_profile_sha256: Digest.optional(),
   hermes_contract_digest: Digest.optional(),
   decision: BindingDecisionSchema.nullable(),
+  execution: BindingExecutionSchema.nullable().optional(),
 }).strict().superRefine((value, context) => {
-  if ((value.state === 'recorded') !== Boolean(value.decision)) {
-    context.addIssue({ code: 'custom', message: 'recorded state and decision must agree' });
+  const decided = ['recorded', 'executed'].includes(value.state);
+  if (decided !== Boolean(value.decision)) {
+    context.addIssue({ code: 'custom', message: 'decision state and evidence must agree' });
+  }
+  if ((value.state === 'executed') !== Boolean(value.execution)) {
+    context.addIssue({ code: 'custom', message: 'executed state and evidence must agree' });
   }
   if (new Set(value.baseline_message_ref_sha256).size
       !== value.baseline_message_ref_sha256.length) {
     context.addIssue({ code: 'custom', message: 'baseline message hashes cannot repeat' });
   }
-  const v2 = value.protocol_version === 'nigma.hermes-conversation-binding/v2';
-  if (v2 && (!value.hermes_profile_sha256 || !value.hermes_contract_digest)) {
-    context.addIssue({ code: 'custom', message: 'v2 binding requires Hermes profile and contract' });
+  const modern = value.protocol_version !== 'nigma.hermes-conversation-binding/v1';
+  if (modern && (!value.hermes_profile_sha256 || !value.hermes_contract_digest)) {
+    context.addIssue({ code: 'custom', message: 'modern binding requires Hermes profile and contract' });
   }
-  if (!v2 && (value.state === 'expired'
+  if (!modern && (value.state === 'expired'
       || value.hermes_profile_sha256 || value.hermes_contract_digest)) {
     context.addIssue({ code: 'custom', message: 'v1 binding cannot carry v2 fields or expired state' });
+  }
+  const v3 = value.protocol_version === 'nigma.hermes-conversation-binding/v3';
+  if (v3 && value.execution === undefined) {
+    context.addIssue({ code: 'custom', message: 'v3 binding requires explicit execution state' });
+  }
+  if (!v3 && (value.state === 'executed' || value.execution !== undefined
+      || value.decision?.execution_phrase_sha256
+      || value.decision?.execution_expires_at)) {
+    context.addIssue({ code: 'custom', message: 'legacy binding cannot carry execution authority' });
+  }
+  if (v3 && value.decision
+      && (!value.decision.execution_phrase_sha256
+        || !value.decision.execution_expires_at)) {
+    context.addIssue({ code: 'custom', message: 'v3 decision requires execution authority' });
   }
 });
 
@@ -147,6 +178,22 @@ export type HermesDecisionScanResult =
 
 export type HermesDecisionSupervisorResult = {
   outcome: 'approval_recorded' | 'already_recorded' | 'approval_window_closed';
+  binding: HermesDecisionBinding;
+  scans: number;
+  transient_errors: number;
+};
+
+export type HermesExecutionScanResult =
+  | { outcome: 'no_match'; binding: HermesDecisionBinding }
+  | { outcome: 'already_executed'; binding: HermesDecisionBinding }
+  | {
+    outcome: 'execution_recorded';
+    binding: HermesDecisionBinding;
+    execution: z.infer<typeof NigmaTrustedConversationExecutionResultSchema>;
+  };
+
+export type HermesExecutionSupervisorResult = {
+  outcome: 'execution_recorded' | 'already_executed' | 'execution_window_closed';
   binding: HermesDecisionBinding;
   scans: number;
   transient_errors: number;
@@ -363,7 +410,7 @@ export function createHermesDecisionBinding(
   const messages = parseMessages(baselineValue);
   const baselineHashes = [...new Set(messages.map(messageRefHash))].sort();
   return sealBinding({
-    protocol_version: 'nigma.hermes-conversation-binding/v2',
+    protocol_version: 'nigma.hermes-conversation-binding/v3',
     state: 'pending',
     source_host_preparation_id: preparation.host_preparation_id,
     source_interface_projection_id: projection.id,
@@ -377,6 +424,7 @@ export function createHermesDecisionBinding(
     hermes_profile_sha256: sha256(`profile:${profile}`),
     hermes_contract_digest: contractDigest,
     decision: null,
+    execution: null,
   });
 }
 
@@ -516,11 +564,13 @@ export async function scanHermesDecisionBinding(
   if (sha256(`conversation:${session}`) !== binding.session_ref_sha256) {
     throw new HermesDecisionAdapterError('SESSION_BINDING_MISMATCH', 'Session does not match binding');
   }
-  if (binding.state === 'recorded') return { outcome: 'already_recorded', binding };
+  if (binding.state === 'recorded' || binding.state === 'executed') {
+    return { outcome: 'already_recorded', binding };
+  }
   if (binding.state === 'expired') {
     throw new HermesDecisionAdapterError('BINDING_EXPIRED', 'Binding approval window has expired');
   }
-  if (binding.protocol_version === 'nigma.hermes-conversation-binding/v2') {
+  if (binding.protocol_version !== 'nigma.hermes-conversation-binding/v1') {
     if (binding.hermes_profile_sha256 !== sha256(`profile:${config.hermesProfile}`)) {
       throw new HermesDecisionAdapterError(
         'PROFILE_BINDING_MISMATCH', 'Hermes profile does not match binding',
@@ -590,6 +640,14 @@ export async function scanHermesDecisionBinding(
       || approval.approval.source_interface_projection_id !== binding.source_interface_projection_id
       || approval.approval.source_interface_projection_digest
         !== binding.source_interface_projection_digest
+      || approval.execution_authorization.plan_id !== approval.approval.plan_id
+      || approval.execution_authorization.plan_digest !== approval.approval.plan_digest
+      || approval.execution_authorization.approval_id !== approval.approval.approval_id
+      || approval.execution_authorization.approval_digest !== approval.approval.digest
+      || approval.execution_authorization.phrase_sha256
+        !== sha256(approval.execution_authorization.phrase)
+      || Date.parse(approval.execution_authorization.expires_at)
+        !== Date.parse(approval.approval.expires_at)
       || approval.execution_performed || approval.approval.execution_performed) {
     throw new HermesDecisionAdapterError(
       'EGO_DECISION_MISMATCH', 'EGO decision did not match the exact Hermes binding',
@@ -605,9 +663,128 @@ export async function scanHermesDecisionBinding(
       approval_digest: approval.approval.digest,
       conversation_record_digest: approval.digest,
       recorded_at: observedAt,
+      execution_phrase_sha256: approval.execution_authorization.phrase_sha256,
+      execution_expires_at: approval.execution_authorization.expires_at,
     },
   });
   return { outcome: 'approval_recorded', binding: recorded, approval };
+}
+
+export async function scanHermesExecutionBinding(
+  bindingValue: unknown,
+  sessionRef: string,
+  messagesValue: unknown,
+  configValue: HermesDecisionAdapterConfig,
+  now = new Date(),
+  fetchImpl: typeof fetch = fetch,
+): Promise<HermesExecutionScanResult> {
+  const binding = verifyHermesDecisionBinding(bindingValue);
+  const session = BoundedRef.parse(sessionRef);
+  const config = checkedConfig(configValue);
+  if (binding.protocol_version !== 'nigma.hermes-conversation-binding/v3') {
+    throw new HermesDecisionAdapterError(
+      'EXECUTION_BINDING_REQUIRED', 'Execution requires a v3 Hermes binding',
+    );
+  }
+  if (sha256(`conversation:${session}`) !== binding.session_ref_sha256) {
+    throw new HermesDecisionAdapterError('SESSION_BINDING_MISMATCH', 'Session does not match binding');
+  }
+  if (binding.hermes_profile_sha256 !== sha256(`profile:${config.hermesProfile}`)) {
+    throw new HermesDecisionAdapterError(
+      'PROFILE_BINDING_MISMATCH', 'Hermes profile does not match binding',
+    );
+  }
+  if (binding.state === 'executed') return { outcome: 'already_executed', binding };
+  if (binding.state !== 'recorded' || !binding.decision
+      || !binding.decision.execution_phrase_sha256
+      || !binding.decision.execution_expires_at) {
+    throw new HermesDecisionAdapterError(
+      'EXECUTION_NOT_AUTHORIZED', 'Binding has no recorded execution authorization',
+    );
+  }
+  if (Date.parse(binding.decision.execution_expires_at) < now.getTime() + 60_000) {
+    throw new HermesDecisionAdapterError(
+      'EXECUTION_WINDOW_CLOSED', 'Execution authorization has expired',
+    );
+  }
+  const excluded = new Set([
+    ...binding.baseline_message_ref_sha256,
+    binding.decision.source_message_ref_sha256,
+  ]);
+  const candidates = parseMessages(messagesValue).filter(message => (
+    message.role === 'user'
+    && !excluded.has(messageRefHash(message))
+    && typeof message.content === 'string'
+    && sha256(message.content) === binding.decision?.execution_phrase_sha256
+  ));
+  if (!candidates.length) return { outcome: 'no_match', binding };
+  if (candidates.length > 1) {
+    throw new HermesDecisionAdapterError(
+      'AMBIGUOUS_HUMAN_EXECUTION', 'More than one new exact execution turn was found',
+    );
+  }
+  const message = candidates[0];
+  const messageHash = messageRefHash(message);
+  const observedAt = now.toISOString();
+  const response = await fetchImpl(
+    `${config.egoBaseUrl}/v1/runtime/nigma/conversation-executions`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.egoRuntimeToken}`,
+        'x-nigma-human-decision-token': config.humanDecisionToken,
+        'idempotency-key': `hermes-execution-${sha256(`${binding.binding_digest}:${messageHash}`).slice(0, 40)}`,
+        'x-interface-profile': config.hermesProfile,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      redirect: 'error',
+      signal: AbortSignal.timeout(config.timeoutMs),
+      body: JSON.stringify({
+        protocol_version: 'nigma.trusted-conversation-execution/v1',
+        host_preparation_id: binding.source_host_preparation_id,
+        interface_projection_id: binding.source_interface_projection_id,
+        interface_projection_digest: binding.source_interface_projection_digest,
+        approval_id: binding.decision.approval_id,
+        approval_digest: binding.decision.approval_digest,
+        turn: {
+          role: 'user',
+          origin: 'externally_authenticated_human',
+          conversation_ref: session,
+          message_ref: messageRef(message),
+          observed_at: observedAt,
+          content: message.content,
+        },
+      }),
+    },
+  );
+  const execution = NigmaTrustedConversationExecutionResultSchema.parse(
+    await responseJson(response, 'EGO conversation execution'),
+  );
+  if (execution.source_conversation_ref_sha256 !== binding.session_ref_sha256
+      || execution.source_message_ref_sha256 !== messageHash
+      || execution.observed_at !== observedAt
+      || execution.approval_id !== binding.decision.approval_id
+      || execution.approval_digest !== binding.decision.approval_digest
+      || !execution.execution_performed
+      || !execution.approval_recorded) {
+    throw new HermesDecisionAdapterError(
+      'EGO_EXECUTION_MISMATCH', 'EGO execution did not match the exact Hermes binding',
+    );
+  }
+  const { binding_digest: _previousDigest, ...bindingCore } = binding;
+  const recorded = sealBinding({
+    ...bindingCore,
+    state: 'executed',
+    execution: {
+      source_message_ref_sha256: messageHash,
+      host_run_id: execution.host_run_id,
+      host_run_status: execution.host_run_status,
+      execution_record_digest: execution.digest,
+      recorded_at: observedAt,
+    },
+  });
+  return { outcome: 'execution_recorded', binding: recorded, execution };
 }
 
 export function expireHermesDecisionBinding(
@@ -616,7 +793,7 @@ export function expireHermesDecisionBinding(
 ): HermesDecisionBinding {
   const binding = verifyHermesDecisionBinding(bindingValue);
   if (binding.state !== 'pending') return binding;
-  if (binding.protocol_version !== 'nigma.hermes-conversation-binding/v2') {
+  if (binding.protocol_version === 'nigma.hermes-conversation-binding/v1') {
     throw new HermesDecisionAdapterError(
       'BINDING_VERSION_UNSUPPORTED', 'Legacy bindings cannot be sealed as expired',
     );
@@ -625,7 +802,7 @@ export function expireHermesDecisionBinding(
     throw new HermesDecisionAdapterError('BINDING_NOT_EXPIRED', 'Binding window is still open');
   }
   const { binding_digest: _previousDigest, ...core } = binding;
-  return sealBinding({ ...core, state: 'expired', decision: null });
+  return sealBinding({ ...core, state: 'expired', decision: null, execution: core.execution });
 }
 
 function transientAdapterError(error: unknown): boolean {
@@ -654,7 +831,7 @@ export async function superviseHermesDecisionBinding(options: {
   let scans = 0;
   let transientErrors = 0;
   while (true) {
-    if (binding.state === 'recorded') {
+    if (binding.state === 'recorded' || binding.state === 'executed') {
       return { outcome: 'already_recorded', binding, scans, transient_errors: transientErrors };
     }
     if (binding.state === 'expired'
@@ -689,6 +866,70 @@ export async function superviseHermesDecisionBinding(options: {
       if (transientErrors > maxTransientErrors) {
         throw new HermesDecisionAdapterError(
           'TRANSIENT_ERROR_LIMIT', 'Hermes supervision exceeded its transient error limit',
+        );
+      }
+    }
+    await wait(pollMs);
+  }
+}
+
+export async function superviseHermesExecutionBinding(options: {
+  binding: HermesDecisionBinding;
+  sessionRef: string;
+  config: HermesDecisionAdapterConfig;
+  pollMs?: number;
+  maxTransientErrors?: number;
+  now?: () => Date;
+  wait?: (milliseconds: number) => Promise<void>;
+  fetchImpl?: typeof fetch;
+  onBinding?: (binding: HermesDecisionBinding) => Promise<void>;
+}): Promise<HermesExecutionSupervisorResult> {
+  let binding = verifyHermesDecisionBinding(options.binding);
+  const pollMs = Math.max(250, Math.min(30_000, options.pollMs ?? 2_000));
+  const maxTransientErrors = Math.max(0, Math.min(100, options.maxTransientErrors ?? 5));
+  const clock = options.now ?? (() => new Date());
+  const wait = options.wait ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
+  const fetchImpl = options.fetchImpl ?? fetch;
+  let scans = 0;
+  let transientErrors = 0;
+  while (true) {
+    if (binding.state === 'executed') {
+      return { outcome: 'already_executed', binding, scans, transient_errors: transientErrors };
+    }
+    if (binding.protocol_version !== 'nigma.hermes-conversation-binding/v3'
+        || binding.state !== 'recorded'
+        || !binding.decision?.execution_expires_at) {
+      throw new HermesDecisionAdapterError(
+        'EXECUTION_NOT_AUTHORIZED', 'Binding has no recorded execution authorization',
+      );
+    }
+    if (Date.parse(binding.decision.execution_expires_at) < clock().getTime() + 60_000) {
+      return {
+        outcome: 'execution_window_closed', binding, scans, transient_errors: transientErrors,
+      };
+    }
+    try {
+      const messages = await fetchHermesDecisionMessages(
+        options.config, options.sessionRef, fetchImpl,
+      );
+      scans += 1;
+      const result = await scanHermesExecutionBinding(
+        binding, options.sessionRef, messages, options.config, clock(), fetchImpl,
+      );
+      if (result.outcome === 'execution_recorded') {
+        binding = result.binding;
+        await options.onBinding?.(binding);
+        return { outcome: result.outcome, binding, scans, transient_errors: transientErrors };
+      }
+      if (result.outcome === 'already_executed') {
+        return { outcome: result.outcome, binding: result.binding, scans, transient_errors: transientErrors };
+      }
+    } catch (error) {
+      if (!transientAdapterError(error)) throw error;
+      transientErrors += 1;
+      if (transientErrors > maxTransientErrors) {
+        throw new HermesDecisionAdapterError(
+          'TRANSIENT_ERROR_LIMIT', 'Hermes execution supervision exceeded its transient error limit',
         );
       }
     }

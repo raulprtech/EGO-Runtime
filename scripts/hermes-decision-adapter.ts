@@ -10,7 +10,9 @@ import {
   probeHermesDecisionCompatibility,
   readHermesDecisionBindingFile,
   scanHermesDecisionBinding,
+  scanHermesExecutionBinding,
   superviseHermesDecisionBinding,
+  superviseHermesExecutionBinding,
   writeHermesDecisionBindingFile,
   type HermesDecisionAdapterConfig,
   type HermesConnectionConfig,
@@ -101,7 +103,7 @@ async function scan(input: Options): Promise<Record<string, unknown>> {
   const sessionRef = required(input['session-ref'], '--session-ref');
   const bindingFile = required(input.binding, '--binding');
   const binding = await readHermesDecisionBindingFile(bindingFile);
-  if (binding.state === 'recorded') {
+  if (binding.state === 'recorded' || binding.state === 'executed') {
     return {
       protocol_version: 'nigma.hermes-decision-adapter-output/v1',
       outcome: 'already_recorded',
@@ -111,7 +113,7 @@ async function scan(input: Options): Promise<Record<string, unknown>> {
     };
   }
   if (binding.state === 'expired'
-      || (binding.protocol_version === 'nigma.hermes-conversation-binding/v2'
+      || (binding.protocol_version !== 'nigma.hermes-conversation-binding/v1'
         && Date.parse(binding.approval_expires_at) < Date.now() + 60_000)) {
     const expired = binding.state === 'expired'
       ? binding : expireHermesDecisionBinding(binding);
@@ -136,6 +138,37 @@ async function scan(input: Options): Promise<Record<string, unknown>> {
     approval_id: result.binding.decision?.approval_id,
     conversation_record_digest: result.binding.decision?.conversation_record_digest,
     execution_performed: false,
+  };
+}
+
+async function executeScan(input: Options): Promise<Record<string, unknown>> {
+  const sessionRef = required(input['session-ref'], '--session-ref');
+  const bindingFile = required(input.binding, '--binding');
+  const binding = await readHermesDecisionBindingFile(bindingFile);
+  if (binding.state === 'executed') {
+    return {
+      protocol_version: 'nigma.hermes-decision-adapter-output/v1',
+      outcome: 'already_executed',
+      binding_digest: binding.binding_digest,
+      host_run_id: binding.execution?.host_run_id,
+      host_run_status: binding.execution?.host_run_status,
+      execution_performed: true,
+    };
+  }
+  const messages = await fetchHermesDecisionMessages(config(), sessionRef);
+  const result = await scanHermesExecutionBinding(
+    binding, sessionRef, messages, config(),
+  );
+  if (result.outcome === 'execution_recorded') {
+    await writeHermesDecisionBindingFile(bindingFile, result.binding);
+  }
+  return {
+    protocol_version: 'nigma.hermes-decision-adapter-output/v1',
+    outcome: result.outcome,
+    binding_digest: result.binding.binding_digest,
+    host_run_id: result.binding.execution?.host_run_id,
+    host_run_status: result.binding.execution?.host_run_status,
+    execution_performed: result.binding.state === 'executed',
   };
 }
 
@@ -193,6 +226,31 @@ async function watch(input: Options): Promise<Record<string, unknown>> {
   };
 }
 
+async function executeWatch(input: Options): Promise<Record<string, unknown>> {
+  const sessionRef = required(input['session-ref'], '--session-ref');
+  const bindingFile = required(input.binding, '--binding');
+  const result = await superviseHermesExecutionBinding({
+    binding: await readHermesDecisionBindingFile(bindingFile),
+    sessionRef,
+    config: config(),
+    pollMs: boundedInteger(input['poll-ms'], 2_000, 250, 30_000),
+    maxTransientErrors: boundedInteger(input['max-transient-errors'], 5, 0, 100),
+    onBinding: binding => writeHermesDecisionBindingFile(bindingFile, binding),
+  });
+  return {
+    protocol_version: 'nigma.hermes-decision-adapter-output/v1',
+    outcome: result.outcome,
+    binding_digest: result.binding.binding_digest,
+    state: result.binding.state,
+    approval_id: result.binding.decision?.approval_id,
+    host_run_id: result.binding.execution?.host_run_id,
+    host_run_status: result.binding.execution?.host_run_status,
+    scans: result.scans,
+    transient_errors: result.transient_errors,
+    execution_performed: result.binding.state === 'executed',
+  };
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const input = options(rest);
@@ -200,7 +258,12 @@ async function main() {
     : command === 'bind' ? await bind(input)
     : command === 'scan' ? await scan(input)
       : command === 'watch' ? await watch(input)
-        : (() => { throw new HermesDecisionAdapterError('ARGUMENTS_INVALID', 'Use doctor, bind, scan or watch'); })();
+        : command === 'execute-scan' ? await executeScan(input)
+          : command === 'execute-watch' ? await executeWatch(input)
+            : (() => { throw new HermesDecisionAdapterError(
+              'ARGUMENTS_INVALID',
+              'Use doctor, bind, scan, watch, execute-scan or execute-watch',
+            ); })();
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

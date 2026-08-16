@@ -10,7 +10,9 @@ import {
   probeHermesDecisionCompatibility,
   readHermesDecisionBindingFile,
   scanHermesDecisionBinding,
+  scanHermesExecutionBinding,
   superviseHermesDecisionBinding,
+  superviseHermesExecutionBinding,
   verifyHermesDecisionBinding,
   writeHermesDecisionBindingFile,
 } from '../src/integrations/hermes_decision_adapter';
@@ -145,6 +147,43 @@ function binding() {
     'aria',
     hex('d'),
   );
+}
+
+async function recordedBinding() {
+  let executionPhrase = '';
+  const call = vi.fn(async (_input: any, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    const response = approvalResponse(body);
+    executionPhrase = response.execution_authorization.phrase;
+    return new Response(JSON.stringify(response), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  });
+  const result = await scanHermesDecisionBinding(binding(), 'hermes-session-1', {
+    data: [
+      { id: 'old-message-1', role: 'user', content: 'Hola' },
+      { id: 'approval-message-1', role: 'user', content: phrase },
+    ],
+  }, config(), new Date('2026-08-15T18:05:00Z'), call as unknown as typeof fetch);
+  if (result.outcome !== 'approval_recorded') throw new Error('approval fixture failed');
+  return { binding: result.binding, executionPhrase };
+}
+
+function executionResponse(body: Record<string, any>) {
+  const core = {
+    protocol_version: 'nigma.trusted-conversation-execution-record/v1',
+    source_conversation_ref_sha256: sha256(`conversation:${body.turn.conversation_ref}`),
+    source_message_ref_sha256: sha256(`message:${body.turn.message_ref}`),
+    observed_at: body.turn.observed_at,
+    approval_id: body.approval_id,
+    approval_digest: body.approval_digest,
+    host_run_id: `host-${hex('1').slice(0, 32)}`,
+    host_run_status: 'succeeded',
+    authority: 'trusted_conversation_adapter',
+    approval_recorded: true,
+    execution_performed: true,
+  };
+  return { ...core, digest: sha256(canonicalJson(core)) };
 }
 
 describe('Hermes trusted-decision sidecar', () => {
@@ -309,9 +348,10 @@ describe('Hermes trusted-decision sidecar', () => {
     });
     expect(compatibility.digest).toMatch(/^[a-f0-9]{64}$/);
     expect(binding()).toMatchObject({
-      protocol_version: 'nigma.hermes-conversation-binding/v2',
+      protocol_version: 'nigma.hermes-conversation-binding/v3',
       hermes_profile_sha256: sha256('profile:aria'),
       hermes_contract_digest: hex('d'),
+      execution: null,
     });
     await expect(scanHermesDecisionBinding(
       binding(), 'hermes-session-1', { data: [] },
@@ -391,5 +431,208 @@ describe('Hermes trusted-decision sidecar', () => {
     expect(call).not.toHaveBeenCalled();
     expect(writes).toHaveLength(1);
     expect(expireHermesDecisionBinding(result.binding)).toEqual(result.binding);
+  });
+
+  it('ignores non-exact execution turns and excludes the approval message', async () => {
+    const approved = await recordedBinding();
+    const call = vi.fn();
+    const result = await scanHermesExecutionBinding(
+      approved.binding,
+      'hermes-session-1',
+      { data: [
+        { id: 'old-message-1', role: 'user', content: approved.executionPhrase },
+        { id: 'approval-message-1', role: 'user', content: approved.executionPhrase },
+        { id: 'assistant-execution-1', role: 'assistant', content: approved.executionPhrase },
+        { id: 'decorated-execution-1', role: 'user', content: `Por favor, ${approved.executionPhrase}` },
+      ] },
+      config(),
+      new Date('2026-08-15T18:10:00Z'),
+      call as unknown as typeof fetch,
+    );
+    expect(result.outcome).toBe('no_match');
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('records one exact execution turn and cannot execute twice', async () => {
+    const approved = await recordedBinding();
+    let submitted: Record<string, any> | undefined;
+    let submittedHeaders: Record<string, string> | undefined;
+    const call = vi.fn(async (input: any, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'http://127.0.0.1:3000/v1/runtime/nigma/conversation-executions',
+      );
+      submitted = JSON.parse(String(init?.body));
+      submittedHeaders = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify(executionResponse(submitted)), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const result = await scanHermesExecutionBinding(
+      approved.binding,
+      'hermes-session-1',
+      { data: [
+        { id: 'approval-message-1', role: 'user', content: phrase },
+        { id: 'execution-message-1', role: 'user', content: approved.executionPhrase },
+      ] },
+      config(),
+      new Date('2026-08-15T18:10:00Z'),
+      call as unknown as typeof fetch,
+    );
+    expect(result.outcome).toBe('execution_recorded');
+    if (result.outcome !== 'execution_recorded') throw new Error('unreachable');
+    expect(result.binding).toMatchObject({
+      protocol_version: 'nigma.hermes-conversation-binding/v3',
+      state: 'executed',
+      execution: {
+        source_message_ref_sha256: sha256('message:execution-message-1'),
+        host_run_id: `host-${hex('1').slice(0, 32)}`,
+        host_run_status: 'succeeded',
+      },
+    });
+    expect(submitted).toMatchObject({
+      protocol_version: 'nigma.trusted-conversation-execution/v1',
+      approval_id: 'approval-1',
+      turn: {
+        role: 'user',
+        origin: 'externally_authenticated_human',
+        conversation_ref: 'hermes-session-1',
+        message_ref: 'execution-message-1',
+        content: approved.executionPhrase,
+      },
+    });
+    expect(submittedHeaders?.authorization).toBe('Bearer ego-runtime-token');
+    expect(submittedHeaders?.['x-nigma-human-decision-token'])
+      .toBe('human-decision-token-that-is-long-0001');
+    expect(submittedHeaders?.['idempotency-key'])
+      .toMatch(/^hermes-execution-[a-f0-9]{40}$/);
+    const serialized = JSON.stringify(result.binding);
+    expect(serialized).not.toContain(approved.executionPhrase);
+    expect(serialized).not.toContain('hermes-session-1');
+    expect(serialized).not.toContain('execution-message-1');
+
+    const directory = await fs.mkdtemp(path.join('/tmp', 'ego-g116-executed-'));
+    directories.push(directory);
+    const file = path.join(directory, 'binding.json');
+    await writeHermesDecisionBindingFile(file, result.binding);
+    const restarted = await readHermesDecisionBindingFile(file);
+    expect(restarted).toEqual(result.binding);
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    const replayCall = vi.fn();
+    await expect(scanHermesExecutionBinding(
+      restarted,
+      'hermes-session-1',
+      [],
+      config(),
+      new Date('2026-08-15T18:11:00Z'),
+      replayCall as unknown as typeof fetch,
+    )).resolves.toMatchObject({ outcome: 'already_executed' });
+    expect(replayCall).not.toHaveBeenCalled();
+  });
+
+  it('reads historical v2 bindings but refuses to infer execution authority', async () => {
+    const current = binding();
+    const { binding_digest: _digest, execution: _execution, ...core } = current;
+    const legacyCore = {
+      ...core,
+      protocol_version: 'nigma.hermes-conversation-binding/v2' as const,
+    };
+    const legacy = {
+      ...legacyCore,
+      binding_digest: sha256(canonicalJson(legacyCore)),
+    };
+    expect(verifyHermesDecisionBinding(legacy)).toEqual(legacy);
+    await expect(scanHermesExecutionBinding(
+      legacy,
+      'hermes-session-1',
+      [],
+      config(),
+      new Date('2026-08-15T18:10:00Z'),
+    )).rejects.toMatchObject({ code: 'EXECUTION_BINDING_REQUIRED' });
+  });
+
+  it('fails closed for ambiguous execution, wrong profile and expired authority', async () => {
+    const approved = await recordedBinding();
+    await expect(scanHermesExecutionBinding(
+      approved.binding,
+      'hermes-session-1',
+      { data: [
+        { id: 'execution-1', role: 'user', content: approved.executionPhrase },
+        { id: 'execution-2', role: 'user', content: approved.executionPhrase },
+      ] },
+      config(),
+      new Date('2026-08-15T18:10:00Z'),
+    )).rejects.toMatchObject({ code: 'AMBIGUOUS_HUMAN_EXECUTION' });
+    await expect(scanHermesExecutionBinding(
+      approved.binding,
+      'hermes-session-1',
+      { data: [] },
+      { ...config(), hermesProfile: 'other' },
+      new Date('2026-08-15T18:10:00Z'),
+    )).rejects.toMatchObject({ code: 'PROFILE_BINDING_MISMATCH' });
+    const call = vi.fn();
+    await expect(superviseHermesExecutionBinding({
+      binding: approved.binding,
+      sessionRef: 'hermes-session-1',
+      config: config(),
+      now: () => new Date('2026-08-15T18:59:01Z'),
+      fetchImpl: call as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      outcome: 'execution_window_closed',
+      scans: 0,
+      transient_errors: 0,
+      binding: { state: 'recorded' },
+    });
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('supervises execution through a transient failure and seals terminal evidence', async () => {
+    const approved = await recordedBinding();
+    let messageReads = 0;
+    const call = vi.fn(async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/messages?')) {
+        messageReads += 1;
+        if (messageReads === 1) return new Response('{}', { status: 503 });
+        return new Response(JSON.stringify({ data: [{
+          id: 'execution-message-supervised-1',
+          role: 'user',
+          content: approved.executionPhrase,
+        }] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(executionResponse(body)), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const writes: unknown[] = [];
+    const wait = vi.fn(async () => undefined);
+    const result = await superviseHermesExecutionBinding({
+      binding: approved.binding,
+      sessionRef: 'hermes-session-1',
+      config: config(),
+      now: () => new Date('2026-08-15T18:10:00Z'),
+      wait,
+      fetchImpl: call as unknown as typeof fetch,
+      onBinding: async value => { writes.push(value); },
+    });
+    expect(result).toMatchObject({
+      outcome: 'execution_recorded',
+      scans: 1,
+      transient_errors: 1,
+      binding: { state: 'executed' },
+    });
+    expect(wait).toHaveBeenCalledOnce();
+    expect(writes).toHaveLength(1);
+    const replayCall = vi.fn();
+    await expect(superviseHermesExecutionBinding({
+      binding: result.binding,
+      sessionRef: 'hermes-session-1',
+      config: config(),
+      fetchImpl: replayCall as unknown as typeof fetch,
+    })).resolves.toMatchObject({
+      outcome: 'already_executed',
+      scans: 0,
+    });
+    expect(replayCall).not.toHaveBeenCalled();
   });
 });
