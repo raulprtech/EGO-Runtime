@@ -58,6 +58,10 @@ read its bounded projection while runtime and human-decision credentials remain
 off the phone. The receipt explicitly states that approval was recorded and
 execution did not begin. See the [G1.13 result](docs/g1.13-deterministic-aria-decision-feedback-result-2026-08-15.md).
 
+G1.14 validates that path with the real continuous ARIA thread: one fresh
+approval, one deterministic mobile event and zero executions, invocations or
+runtime receipts. See the [G1.14 result](docs/g1.14-real-aria-decision-feedback-result-2026-08-15.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.

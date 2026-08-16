@@ -133,6 +133,13 @@ or relax the HTTP URL guard merely to cross the Windows/WSL boundary. Windows
 can call a WSL-hosted EGO loopback service when that platform forwarding is
 available; otherwise use authenticated HTTPS between hosts.
 
+If Windows localhost forwarding is unavailable during a controlled local test,
+an owner-managed TCP or HTTP bridge may listen only on Windows loopback and
+forward to the exact WSL EGO address. Verify the bridge before binding, remove
+it after the terminal decision and never bind it to LAN interfaces. This is a
+deployment workaround, not permission to add non-loopback HTTP to the sidecar
+allow-list.
+
 When Windows Node accesses `\\wsl.localhost\<distro>\...`, the adapter does
 not trust Windows' synthetic POSIX mode. It accepts only a bounded WSL UNC path,
 invokes `%SystemRoot%\System32\wsl.exe`, uses absolute `/usr/bin` utilities,
