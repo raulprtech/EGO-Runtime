@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { StudyPlanSchema } from '../domain/types';
 import {
   getNigmaAdapterPolicy,
   isNigmaHandoffConfigured,
@@ -644,6 +646,47 @@ export type NigmaTrustedConversationExecutionRequest = z.infer<
   typeof NigmaTrustedConversationExecutionRequestSchema
 >;
 
+export const NigmaAuthenticatedEducationalConfirmationRequestSchema = z.object({
+  protocol_version: z.literal("nigma.authenticated-educational-confirmation/v1"),
+  host_preparation_id: BoundedId,
+  interface_projection_id: z.string().regex(/^host-preparation-interface-[a-f0-9]{16}$/),
+  interface_projection_digest: Digest,
+  turn: z.object({
+    role: z.literal("user"),
+    origin: z.literal("externally_authenticated_human"),
+    conversation_ref: BoundedId,
+    message_ref: BoundedId,
+    observed_at: z.iso.datetime(),
+    content: z.string().min(1).max(40),
+  }).strict(),
+  approver: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/),
+}).strict();
+export type NigmaAuthenticatedEducationalConfirmationRequest = z.infer<
+  typeof NigmaAuthenticatedEducationalConfirmationRequestSchema
+>;
+
+export const NigmaAuthenticatedEducationalConfirmationResultSchema = z.object({
+  protocol_version: z.literal("nigma.authenticated-educational-confirmation-record/v1"),
+  source_conversation_ref_sha256: Digest,
+  source_message_ref_sha256: Digest,
+  observed_at: z.iso.datetime(),
+  approval: NigmaTrustedHumanApprovalResultSchema,
+  host_run_id: BoundedId,
+  host_run_status: z.enum(["succeeded", "failed", "cancelled", "timed_out"]),
+  presentation: z.object({
+    media_type: z.literal("text/markdown"),
+    content: z.string().min(1).max(12_000),
+    source_artifact_sha256: Digest,
+  }).strict(),
+  authority: z.literal("authenticated_educational_confirmation"),
+  approval_recorded: z.literal(true),
+  execution_performed: z.literal(true),
+  digest: Digest,
+}).strict();
+export type NigmaAuthenticatedEducationalConfirmationResult = z.infer<
+  typeof NigmaAuthenticatedEducationalConfirmationResultSchema
+>;
+
 type TrustedConversationSource = {
   source_conversation_ref_sha256: string;
   source_message_ref_sha256: string;
@@ -658,6 +701,11 @@ const NigmaHumanApprovalChallengeCoreSchema = z.object({
   approval_phrase_sha256: Digest,
   presentation_locale: NigmaPresentationLocaleSchema.optional(),
   approval_target: PreparationApprovalTargetSchema,
+  authenticated_educational_scope: z.object({
+    objective_sha256: Digest,
+    risk_level: z.enum(["low", "medium"]),
+    local_read_only_materials: z.literal(true),
+  }).strict().optional(),
   created_at: z.iso.datetime(),
   expires_at: z.iso.datetime(),
 }).strict();
@@ -1117,6 +1165,57 @@ export async function recordTrustedNigmaConversationDecision(
   });
 }
 
+async function renderAuthenticatedStudyPlan(result: NigmaHostRunResult): Promise<{
+  media_type: "text/markdown"; content: string; source_artifact_sha256: string;
+}> {
+  if (result.status !== "succeeded") throw new NigmaHostError("NIGMA_EDUCATIONAL_EXECUTION_FAILED", 502, "Educational execution failed");
+  const record = await getNigmaHostRunRecord(result.host_run_id);
+  const reference = record.artifact_refs.find(item => {
+    try { return new URL(item.uri).pathname.endsWith("/study_plan.json"); } catch { return false; }
+  });
+  if (!reference || reference.media_type !== "application/json" || reference.size_bytes > 1_000_000) throw new NigmaHostError("NIGMA_STUDY_PLAN_ARTIFACT_MISSING", 502, "Study plan artifact is missing");
+  const uri = new URL(reference.uri);
+  if (uri.protocol !== "file:" || (uri.hostname && uri.hostname !== "localhost")) throw new NigmaHostError("NIGMA_STUDY_PLAN_ARTIFACT_UNREADABLE", 502, "Study plan cannot be projected safely");
+  const root = await fs.realpath(path.resolve(process.env.LOCAL_DATA_DIR ?? ".ego-runtime", "artifacts"));
+  const candidate = await fs.realpath(fileURLToPath(uri));
+  const relative = path.relative(root, candidate);
+  if (!relative || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) throw new NigmaHostError("NIGMA_STUDY_PLAN_ARTIFACT_UNREADABLE", 502, "Study plan is outside the artifact store");
+  const bytes = await fs.readFile(candidate);
+  if (bytes.length !== reference.size_bytes || createHash("sha256").update(bytes).digest("hex") !== reference.sha256) throw new NigmaHostError("NIGMA_STUDY_PLAN_ARTIFACT_INTEGRITY_FAILED", 502, "Study plan integrity failed");
+  const plan = StudyPlanSchema.parse(JSON.parse(bytes.toString("utf8")));
+  const difficulty = { introductory: "introductoria", intermediate: "intermedia", advanced: "avanzada" }[plan.estimated_difficulty];
+  const lines = ["## Plan de aprendizaje", "", plan.learning_objective, "", "**Dificultad estimada:** " + difficulty, "", "### Objetivos", ...plan.sub_objectives.slice(0, 10).map(item => "- " + item), "", "### Sesiones"];
+  for (const [index, session] of plan.study_sessions.slice(0, 10).entries()) lines.push("", "**" + (index + 1) + ". " + session.topic + " · " + session.duration_minutes + " min**", ...session.activities.slice(0, 8).map(item => "- " + item), "- Criterio de término: " + session.completion_criteria.slice(0, 4).join("; "));
+  lines.push("", "### Repaso", "- Días: " + plan.review_cadence_days.join(", "), "", "### Criterios de dominio", ...plan.mastery_criteria.slice(0, 10).map(item => "- " + item));
+  return { media_type: "text/markdown", content: lines.join("\n").slice(0, 12_000), source_artifact_sha256: reference.sha256 };
+}
+
+export function isExplicitEducationalConfirmation(content: string): boolean {
+  const decision = content.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .trim().toLowerCase().replace(/[.!]+$/u, '');
+  return ['si', 'yes', 'confirmo', 'adelante'].includes(decision);
+}
+
+export async function confirmAndExecuteAuthenticatedEducationalPreparation(
+  requestValue: unknown, idempotencyKey: string, now = new Date(),
+): Promise<NigmaAuthenticatedEducationalConfirmationResult> {
+  const request = NigmaAuthenticatedEducationalConfirmationRequestSchema.parse(requestValue);
+  if (!idempotencyKey || idempotencyKey.length > 200) throw new NigmaHostError("NIGMA_HOST_IDEMPOTENCY_REQUIRED", 400, "A bounded Idempotency-Key is required");
+  const challenge = await readHumanChallengeOrNull(request.host_preparation_id);
+  if (!challenge?.authenticated_educational_scope
+      || !isExplicitEducationalConfirmation(request.turn.content)) throw new NigmaHostError("NIGMA_EDUCATIONAL_CONFIRMATION_REQUIRED", 409, "An explicit educational confirmation is required");
+  const observed = Date.parse(request.turn.observed_at);
+  const linksAgree = request.interface_projection_id === challenge.interface_projection_id && request.interface_projection_digest === challenge.interface_projection_digest;
+  if (!linksAgree || observed < Date.parse(challenge.created_at) - 30_000 || observed > now.getTime() + 30_000 || observed > Date.parse(challenge.expires_at) || now.getTime() > Date.parse(challenge.expires_at)) throw new NigmaHostError("NIGMA_EDUCATIONAL_CONFIRMATION_MISMATCH", 409, "Confirmation does not match the sealed educational preparation");
+  const source = { source_conversation_ref_sha256: sha256("conversation:" + request.turn.conversation_ref), source_message_ref_sha256: sha256("message:" + request.turn.message_ref), observed_at: new Date(observed).toISOString() };
+  const identity = sha256(idempotencyKey + ":" + challenge.record_digest).slice(0, 40);
+  const approval = await recordTrustedNigmaApproval({ protocol_version: "nigma.trusted-human-approval-submission/v1", host_preparation_id: challenge.host_preparation_id, interface_projection_id: challenge.interface_projection_id, interface_projection_digest: challenge.interface_projection_digest, approval_phrase: approvalPhrase(challenge.approval_target, challenge.presentation_locale ?? "es-MX"), approver: request.approver, expires_at: challenge.expires_at }, "authenticated-educational-approval-" + identity, source);
+  const execution = await runApprovedNigmaPlan({ plan_id: approval.plan_id, learner_context: { user_id: "human-" + source.source_conversation_ref_sha256.slice(0, 32), session_id: "conversation-" + source.source_conversation_ref_sha256.slice(0, 32), objective_id: "plan-" + sha256(approval.plan_id).slice(0, 32) } }, "authenticated-educational-execution-" + identity);
+  const presentation = await renderAuthenticatedStudyPlan(execution);
+  const provisional = { protocol_version: "nigma.authenticated-educational-confirmation-record/v1" as const, ...source, approval, host_run_id: execution.host_run_id, host_run_status: execution.status, presentation, authority: "authenticated_educational_confirmation" as const, approval_recorded: true as const, execution_performed: true as const };
+  return NigmaAuthenticatedEducationalConfirmationResultSchema.parse({ ...provisional, digest: sha256(canonicalJson(provisional)) });
+}
+
 const NigmaRuntimeFallbackUpstreamSchema = z.object({
   protocol_version: z.literal('nigma.educational-runtime-fallback/v1'),
   id: BoundedId,
@@ -1309,6 +1408,13 @@ async function persistHumanApprovalChallenge(
       approval_phrase_sha256: sha256(projection.approval_phrase),
       presentation_locale: projection.locale,
       approval_target: preparation.approval_target,
+      authenticated_educational_scope: ["low", "medium"].includes(preparation.plan.risk_level)
+        ? {
+          objective_sha256: sha256(preparation.objective),
+          risk_level: preparation.plan.risk_level as "low" | "medium",
+          local_read_only_materials: true as const,
+        }
+        : undefined,
     };
     if (existing) {
       const existingIdentity = {
@@ -1317,6 +1423,7 @@ async function persistHumanApprovalChallenge(
         approval_phrase_sha256: existing.approval_phrase_sha256,
         presentation_locale: existing.presentation_locale,
         approval_target: existing.approval_target,
+        authenticated_educational_scope: existing.authenticated_educational_scope,
       };
       if (canonicalJson(existingIdentity) !== canonicalJson(identity)) {
         throw new NigmaHostError(

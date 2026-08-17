@@ -8,3 +8,5 @@ coverage/
 *.log
 .env*
 !.env.example
+
+config/*.local.json

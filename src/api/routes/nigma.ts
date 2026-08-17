@@ -12,6 +12,7 @@ import {
 } from '../../runtime/nigma_handoff';
 import {
   NigmaEducationalPreparationRequestSchema,
+  NigmaAuthenticatedEducationalConfirmationRequestSchema,
   NigmaPresentationLocaleSchema,
   NigmaHostError,
   NigmaHostRunRequestSchema,
@@ -21,6 +22,7 @@ import {
   getNigmaHostRunEvents,
   getNigmaHostRunRecord,
   prepareNigmaEducationalTask,
+  confirmAndExecuteAuthenticatedEducationalPreparation,
   prepareNigmaHostFallback,
   renderNigmaHostPreparationSse,
   recordTrustedNigmaConversationDecision,
@@ -58,6 +60,21 @@ router.post('/educational-tasks/prepare', authMiddleware, async (req, res, next)
       return res.send(rendered);
     }
     return res.json(result);
+  } catch (error) {
+    if (error instanceof NigmaHostError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    if (error instanceof ZodError) return next(error);
+    return next(error);
+  }
+});
+
+router.post('/educational-tasks/confirm-and-execute', authMiddleware, async (req, res, next) => {
+  try {
+    const request = NigmaAuthenticatedEducationalConfirmationRequestSchema.parse(req.body);
+    return res.json(await confirmAndExecuteAuthenticatedEducationalPreparation(
+      request, req.header('Idempotency-Key') ?? '',
+    ));
   } catch (error) {
     if (error instanceof NigmaHostError) {
       return res.status(error.status).json({ error: error.code, message: error.message });

@@ -258,3 +258,14 @@ restartable distributed scheduler. A process loss during an active transition
 requires an exact idempotent retry. Remote deployment also requires platform
 service authentication or a signed-envelope protocol; SHA-256 alone
 authenticates no sender.
+
+
+## Authenticated educational confirmation
+
+POST /v1/runtime/nigma/educational-tasks/confirm-and-execute is the local MVP adapter for one explicit learner confirmation. It is available only when the sealed preparation records low or medium risk and local read-only educational scope. The complete human turn must normalize exactly to Sí, Yes, Confirmo or Adelante; compound text fails closed.
+
+The endpoint uses ordinary runtime authentication because ARIA is the authenticated backend boundary in this local single-user deployment. It records domain-separated conversation/message hashes, obtains the same exact Nigma approval internally, runs the approved plan idempotently and returns only a validated Markdown projection of study_plan.json. The artifact must remain under LOCAL_DATA_DIR/artifacts, be at most 1 MB and match its recorded size and SHA-256.
+
+This endpoint is not suitable for public or multiuser deployment without a distinct interface identity and durable session binding. It never applies to external side effects, accounts, network publication, purchases or destructive operations. Those retain the separate human-decision credential and exact scoped approval flow.
+
+For local self-routing, copy config/nigma-host-routes.example.json to an ignored config/*.local.json file, set its loopback port to the active EGO port, and configure NIGMA_HOST_ROUTES_FILE plus NIGMA_RUNTIME_TOKEN_EGO. NIGMA_HANDOFF_ENABLED=true still requires the explicit NIGMA_ADAPTER_POLICY_FILE allowlist.
