@@ -58,6 +58,20 @@ describe('runtime-owned material staging', () => {
     expect(await fs.readFile(target, 'utf8')).toContain('Photosynthesis');
   });
 
+  it('accepts modern Word documents with their exact DOCX media type', async () => {
+    const staged = await MaterialStore.stage({
+      ...input(Buffer.from('synthetic-docx')),
+      name: 'lesson.docx',
+      mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      idempotencyKey: 'attachment-docx-1',
+    });
+    expect(staged.record).toMatchObject({
+      name: 'lesson.docx',
+      media_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      status: 'active',
+    });
+  });
+
   it('binds idempotency to bytes and owner while rejecting unsafe configuration', async () => {
     await MaterialStore.stage(input());
     await expect(MaterialStore.stage(input(Buffer.from('changed'))))

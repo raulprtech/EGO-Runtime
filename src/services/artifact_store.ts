@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Storage } from '@google-cloud/storage';
 import { PDFParse } from 'pdf-parse';
+import mammoth from 'mammoth';
 import { Artifact } from '../api/schemas/runtime_schemas';
 import { getRuntimeRepository } from './runtime_repository';
 
@@ -55,6 +56,10 @@ async function extract(buffer: Buffer, artifact: Artifact): Promise<string> {
     } finally {
       await parser.destroy();
     }
+  }
+  if (artifact.mime_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value.slice(0, maxContextChars);
   }
   return buffer.toString('utf8', 0, maxContextChars);
 }

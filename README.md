@@ -41,13 +41,20 @@ npm run demo
 Local state and generated artifacts are written under `.ego-runtime/`. Inputs must be inside `LOCAL_INPUT_ROOT`; symlinks and paths that escape that root are rejected.
 
 G1.19 adds authenticated runtime-owned material staging. A relay can stream one
-PDF, plain-text, Markdown or JSON source to `POST /v1/runtime/materials`; EGO
+PDF, modern DOCX, plain-text, Markdown or JSON source to
+`POST /v1/runtime/materials`; EGO
 stores bytes and an integrity record with owner-only permissions inside
 `LOCAL_INPUT_ROOT`, returns a bounded `file://` reference plus hash and size,
 and retains only a hashed owner reference. Reads survive restart. Explicit
 release removes the bytes idempotently and retains a sealed tombstone. Storage
 that cannot enforce `0700/0600` permissions fails closed. See the
 [G1.19 result](docs/g1.19-portable-material-staging-result-2026-08-16.md).
+
+G1.21 adds bounded local DOCX text extraction and advertises
+`documents.docx`. Legacy binary `.doc` remains unsupported. Runtime-owned
+`file://` references may cross a Windows/WSL host boundary as opaque metadata;
+the host must not open or rewrite them before approved EGO execution. See the
+[G1.21 result](docs/g1.21-docx-and-loopback-boundary-result-2026-08-17.md).
 
 Assessment requests may declare a BCP47 language. The runtime returns the declared language, bounded per-question scores and updated mastery. Raw learner responses are used transiently for grading but are not retained in local or Firestore attempt records; durable state contains only response count, digest, scores and mastery.
 

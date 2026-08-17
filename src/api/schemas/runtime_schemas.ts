@@ -3,7 +3,11 @@ import { z } from 'zod';
 export const ArtifactSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string().min(1).max(255),
-  mime_type: z.enum(['application/pdf', 'text/plain', 'text/markdown', 'application/json']),
+  mime_type: z.enum([
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain', 'text/markdown', 'application/json',
+  ]),
   uri: z.string().refine(value => /^gs:\/\/[^/]+\/.+$/.test(value) || /^file:\/\/.+$/.test(value),
     'Artifact URI must use gs:// or file://'),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),

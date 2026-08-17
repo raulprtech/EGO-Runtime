@@ -9,6 +9,7 @@ const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ALLOWED_MEDIA = new Map([
   ['application/pdf', new Set(['.pdf'])],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', new Set(['.docx'])],
   ['text/plain', new Set(['.txt'])],
   ['text/markdown', new Set(['.md', '.markdown'])],
   ['application/json', new Set(['.json'])],

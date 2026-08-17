@@ -3,6 +3,7 @@ build/
 dist/
 coverage/
 .ego-runtime/
+.ego-materials/
 .DS_Store
 *.log
 .env*
