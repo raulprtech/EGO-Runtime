@@ -8,7 +8,7 @@ export const RUNTIME_MANIFEST_VERSION = '1.0';
 export const RUNTIME_CAPABILITIES = [
   'education.study_plan', 'education.flashcards', 'education.quiz',
   'education.feynman', 'education.mastery', 'audio.transcription', 'audio.synthesis',
-  'documents.pdf', 'documents.text', 'artifacts',
+  'documents.pdf', 'documents.docx', 'documents.text', 'artifacts',
 ] as const;
 
 export const RuntimeManifestSchema = z.object({
@@ -123,7 +123,9 @@ export function createRuntimeManifest(): RuntimeManifest {
     limits: {
       max_attachments: 20, max_message_characters: 20_000,
       accepted_artifact_mime_types: [
-        'application/pdf', 'text/plain', 'text/markdown', 'application/json',
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'text/plain', 'text/markdown', 'application/json',
       ],
     },
   });

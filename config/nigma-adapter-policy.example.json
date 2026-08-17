@@ -34,12 +34,24 @@
       "uri_schemes": [
         "file"
       ]
+    },
+    {
+      "snapshot_id": "local-files@1.1.0",
+      "snapshot_digest": "6ae00b0313d399e6c6aa9d638e1bd4021c86a08a5c8b35a0c38e18c7a73a9743",
+      "uri_schemes": [
+        "file"
+      ]
     }
   ],
   "bindings": [
     {
       "plugin_snapshot_id": "nigma-study@0.1.0",
       "provider_snapshot_id": "local-files@1.0.0",
+      "capability": "learning_material_reader"
+    },
+    {
+      "plugin_snapshot_id": "nigma-study@0.1.0",
+      "provider_snapshot_id": "local-files@1.1.0",
       "capability": "learning_material_reader"
     }
   ]

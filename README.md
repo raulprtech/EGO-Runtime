@@ -40,6 +40,22 @@ npm run demo
 
 Local state and generated artifacts are written under `.ego-runtime/`. Inputs must be inside `LOCAL_INPUT_ROOT`; symlinks and paths that escape that root are rejected.
 
+G1.19 adds authenticated runtime-owned material staging. A relay can stream one
+PDF, modern DOCX, plain-text, Markdown or JSON source to
+`POST /v1/runtime/materials`; EGO
+stores bytes and an integrity record with owner-only permissions inside
+`LOCAL_INPUT_ROOT`, returns a bounded `file://` reference plus hash and size,
+and retains only a hashed owner reference. Reads survive restart. Explicit
+release removes the bytes idempotently and retains a sealed tombstone. Storage
+that cannot enforce `0700/0600` permissions fails closed. See the
+[G1.19 result](docs/g1.19-portable-material-staging-result-2026-08-16.md).
+
+G1.21 adds bounded local DOCX text extraction and advertises
+`documents.docx`. Legacy binary `.doc` remains unsupported. Runtime-owned
+`file://` references may cross a Windows/WSL host boundary as opaque metadata;
+the host must not open or rewrite them before approved EGO execution. See the
+[G1.21 result](docs/g1.21-docx-and-loopback-boundary-result-2026-08-17.md).
+
 Assessment requests may declare a BCP47 language. The runtime returns the declared language, bounded per-question scores and updated mastery. Raw learner responses are used transiently for grading but are not retained in local or Firestore attempt records; durable state contains only response count, digest, scores and mastery.
 
 The credential-free provider uses the versioned `deterministic-bilingual-v1` assessment baseline. Results include matched/missing elements and explicit mastery, partial-match, uncertainty or insufficient-evidence reasons. Its reviewed Spanish/English aliases cover the current Nigma demonstration only; this deterministic fallback is not an open-domain semantic grader.
@@ -50,16 +66,60 @@ The credential-free provider uses the versioned `deterministic-bilingual-v1` ass
 
 See [local development](docs/local-development.md), [Nigma handoff](docs/nigma-handoff.md), [Nigma host orchestration](docs/nigma-host-orchestration.md), [F4.6 host events](docs/f4.6-runtime-neutral-host-events-result-2026-08-14.md), [deterministic demo provider](docs/deterministic-demo-provider.md), [turn-based audio](docs/turn-based-audio.md), [process protocol](docs/process-protocol.md), [API](docs/api.md), [architecture](docs/architecture.md), [control-plane integration](docs/control-plane-integration.md), [execution integrity](docs/execution-integrity.md), [cloud E2E](docs/cloud-e2e.md), and the neutral [deployment contract](docs/deployment-contract.md).
 
+G1.1 adds a host-independent educational decision adapter. `POST /v1/runtime/nigma/educational-tasks/prepare` forwards only objective and bounded local material references, validates Nigma's sealed route and returns a compact human-review projection. It never approves or executes; the existing `/host-runs` resumes only after Nigma independently confirms an exact current approval. G1.2 persists each transition atomically and exposes authenticated state and cursor-based event reads that survive a local restart without retaining learner context or secrets. G1.3 derives eligible pre-acceptance failures from that sealed record and asks Nigma for a new, separately approvable route; it never substitutes a runtime after acceptance. G1.5 verifies Nigma's selected/runner-up explanation and projects scores, factor deltas and `human_approval_required` without receiving authority. G1.6 renders that same verified object in Spanish or English as a separately sealed `informational_only` host view; locale is never forwarded to Nigma. G1.7 maps the verified preparation to generic `tool.*` plus `assistant.completed` events and serves them as JSON or explicit SSE without modifying ARIA. G1.8 adds an exact human-decision adapter protected by a second independent credential and a restart-safe sealed challenge; it records approval only and never resumes execution. G1.9 maps one externally authenticated `user` conversation turn to that adapter, rejects model/tool roles and extra text, and retains only hashed conversation references. G1.10 adds a deployable Hermes sidecar that snapshots an authenticated session, observes only later exact human turns, records at most one approval and locks locally without touching ARIA. G1.11 binds the exact Hermes profile and advertised contract, adds `doctor` plus restart-safe `watch`, seals expiry before any late message read and builds a standalone Windows-compatible sidecar. See the [sidecar guide](docs/hermes-decision-sidecar.md), [G1.10](docs/g1.10-hermes-conversation-sidecar-result-2026-08-15.md) and [G1.11](docs/g1.11-real-hermes-supervisor-result-2026-08-15.md).
+
+G1.13 adds deterministic, profile-scoped decision feedback. A verified
+conversation approval creates one sealed informational event; ARIA's relay can
+read its bounded projection while runtime and human-decision credentials remain
+off the phone. The receipt explicitly states that approval was recorded and
+execution did not begin. See the [G1.13 result](docs/g1.13-deterministic-aria-decision-feedback-result-2026-08-15.md).
+
+G1.14 validates that path with the real continuous ARIA thread: one fresh
+approval, one deterministic mobile event and zero executions, invocations or
+runtime receipts. See the [G1.14 result](docs/g1.14-real-aria-decision-feedback-result-2026-08-15.md).
+
+G1.15 introduces a separate exact-turn execution authority. A verified
+conversation approval now creates an owner-only execution challenge and tells
+the user the exact second phrase required to resume the already-approved plan.
+`POST /v1/runtime/nigma/conversation-executions` accepts only that later
+human turn from the same profile and conversation, derives privacy-safe learner
+references, and uses one fixed idempotency identity per approval. Nigma still
+revalidates approval before issuing an invocation, and ARIA receives a separate
+terminal informational receipt. The Hermes supervisor integration of this
+second turn remains G1.16. See the [G1.15 result](docs/g1.15-explicit-conversation-execution-authority-result-2026-08-15.md).
+
+G1.16 makes that second authority operable through the replaceable Hermes
+sidecar. New v3 bindings seal the execution phrase only as a hash after
+approval; `execute-scan` and `execute-watch` accept only one later exact
+human turn, call the G1.15 port and lock as `executed` with content-free
+terminal evidence. An isolated HTTP golden completed one approval, invocation,
+deterministic runtime execution and receipt; replay after restart made no
+upstream call. ARIA and the real G1.14 plan remain untouched. See the
+[G1.16 result](docs/g1.16-hermes-execution-supervisor-result-2026-08-15.md).
+
+G1.17 validates that path with the installed Hermes `aria` profile, fresh
+isolated Nigma/EGO processes and a harmless deterministic learning task. The
+first real attempt failed closed because EGO's local policy omitted
+`assessment`; the repaired policy completed one host run with eight lifecycle
+events, four hash-verified artifacts, one receipt and one experience record.
+Offline replay made no upstream call. EGO now preflights configured runtime
+capabilities before asking for human approval, distinguishes structured host
+rejections from bad credentials and projects short product-neutral approval
+messages while retaining complete internal audit evidence. See the
+[G1.17 result](docs/g1.17-real-hermes-deterministic-execution-result-2026-08-15.md).
+
 ## Security
 
 EGO rejects arbitrary remote URLs, confines local inputs to a configured root, restricts cloud inputs to configured buckets, verifies optional hashes, validates all model outputs, keeps answer keys outside learner artifacts and uses constant-time application-token comparison.
 
 ## Status
 
-Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. Exact replay is visible without exposing routes or credentials. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. F5.2 assessment integration declares the requested language and removes raw learner responses from durable attempts; see [the F5.2 result](docs/f5.2-learning-assessment-result-2026-08-14.md). Durable asynchronous host traces, scheduling, richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
+Version 0.9 adds the runtime-neutral host-run identity and eight-event lifecycle on top of the host-owned Nigma orchestration loop. G1.2 makes those traces durable, integrity-checked and readable after restart; distributed scheduling remains planned. The strict runtime adapter and credential-free deterministic provider remain available for local integration tests. F5.2 assessment integration declares the requested language and removes raw learner responses from durable attempts; see [the F5.2 result](docs/f5.2-learning-assessment-result-2026-08-14.md). Richer tutoring conversations, adaptive question generation and production-scale retrieval remain planned extensions.
 
 F5.3 adds local cooperative cancellation for sealed Nigma invocations. EGO reports `cancelling` until its worker drains, removes partial artifact files and records, then exposes a cancelled receipt with the exact Nigma cancellation reference and durable rollback evidence. Cloud cancellation remains fail-closed and unimplemented. See [the F5.3 result](docs/f5.3-runtime-cancellation-result-2026-08-14.md).
 
 ## License
 
 Apache-2.0.
+
+G1.26 allows the original authenticated educational instruction to execute an already prepared low/medium-risk, local read-only plan in one turn. It binds the exact objective hash, preserves Nigma approval and idempotency, and returns a verified same-language study plan. No external or destructive authority is added. See [the G1.26 result](docs/g1.26-single-turn-educational-execution-result-2026-08-17.md).

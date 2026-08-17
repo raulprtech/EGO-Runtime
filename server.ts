@@ -9,6 +9,7 @@ import runtimeRoutes from './src/api/routes/runtime';
 import transcriptionRoutes from './src/api/routes/transcription';
 import speechRoutes from './src/api/routes/speech';
 import nigmaRoutes from './src/api/routes/nigma';
+import materialRoutes from './src/api/routes/materials';
 import { createServer as createViteServer } from 'vite';
 import { ZodError } from 'zod';
 import { TaskQueue } from './src/services/task_queue';
@@ -37,6 +38,7 @@ export async function createApp() {
     exposedHeaders: [
       'X-Speech-Id', 'X-Speech-Provider', 'X-Audio-Sample-Rate',
       'X-Audio-Channels', 'X-Audio-Duration-Ms',
+      'X-Nigma-Projection-Digest',
     ],
   }));
   app.use(express.json({ limit: '256kb' }));
@@ -53,6 +55,7 @@ export async function createApp() {
   }));
   app.use('/v1/runtime/transcriptions', transcriptionRoutes);
   app.use('/v1/runtime/speech', speechRoutes);
+  app.use('/v1/runtime/materials', materialRoutes);
   app.use('/v1/runtime/nigma', nigmaRoutes);
   app.use('/v1/runtime', runtimeRoutes);
   if (process.env.NODE_ENV !== 'production') {

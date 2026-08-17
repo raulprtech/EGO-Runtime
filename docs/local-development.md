@@ -12,6 +12,19 @@ EGO_MODEL=gemini-3.5-flash
 
 Only the selected provider credentials are required. The bundled hackathon adapter reads `GEMINI_API_KEY` or `GOOGLE_API_KEY`.
 
+The optional Nigma human-decision adapter requires
+`NIGMA_HUMAN_DECISION_TOKEN`. Generate at least 32 random characters, keep it
+separate from `INTERNAL_RUNTIME_TOKEN`, and expose it only to the trusted
+conversation/UI adapter that captures an explicit owner decision. Never place
+it in model context or a mobile bundle.
+
+The optional Hermes conversation sidecar additionally reads
+`HERMES_CHAT_URL`, `HERMES_CHAT_API_KEY`, `EGO_RUNTIME_URL` and
+`EGO_RUNTIME_TOKEN`; set `HERMES_PROFILE` to the exact owning profile, such as
+`aria`. These are process-owned transport settings; they must not
+be sent to a model, stored in ARIA or written into its sealed binding. See the
+[sidecar guide](hermes-decision-sidecar.md).
+
 Execution approval is disabled locally unless `REQUIRE_EXECUTION_APPROVAL=true`. When enabled, configure `EXECUTION_APPROVAL_SECRET`. Configure the independent `RESULT_RECEIPT_SECRET` to issue terminal signed receipts. Generate both as distinct high-entropy secrets and keep them out of client applications.
 
 ## Start
@@ -29,12 +42,21 @@ Run `npm run smoke:model` to verify the configured provider with a minimal struc
 ```text
 .ego-runtime/
   state.json
+  nigma-human-approval-challenges/
+    <host-preparation-id>.json
   artifacts/
     <request-id>/
       <artifact-id>/
 ```
 
 `state.json` is written through atomic replacement and contains jobs, events, evaluator-only practice data, attempts and mastery. The local adapter targets one runtime process. Use the cloud adapter for distributed workers.
+
+Human-approval challenge files contain identities, hashes, the exact approval
+target and bounded timestamps, but no objective, materials or raw phrase. EGO
+requires owner-only `0600` file permissions and fails closed on filesystems
+that cannot enforce them. Use a Linux filesystem or an equivalently protected
+deployment volume; DrvFS-mounted Windows directories are not suitable for this
+store.
 
 ## Input confinement
 

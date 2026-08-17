@@ -228,13 +228,18 @@ function referenceScheme(uri: string): 'file' | 'gs' {
 function inferMimeType(reference: Record<string, unknown>, uri: string): Artifact['mime_type'] {
   const declared = reference.media_type ?? reference.mime_type;
   const supported = new Set<Artifact['mime_type']>([
-    'application/pdf', 'text/plain', 'text/markdown', 'application/json',
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain', 'text/markdown', 'application/json',
   ]);
   if (typeof declared === 'string' && supported.has(declared as Artifact['mime_type'])) {
     return declared as Artifact['mime_type'];
   }
   const lower = uri.toLowerCase().split(/[?#]/, 1)[0];
   if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.docx')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
   if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'text/markdown';
   if (lower.endsWith('.txt')) return 'text/plain';
   if (lower.endsWith('.json')) return 'application/json';

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --import tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && npm run build:hermes-decision",
+    "build:hermes-decision": "esbuild scripts/hermes-decision-adapter.ts --bundle --platform=node --format=cjs --packages=bundle --sourcemap --outfile=dist/hermes-decision-adapter.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
@@ -14,7 +15,8 @@
     "demo": "node scripts/demo.js",
     "smoke:model": "node --import tsx scripts/model-smoke.ts",
     "smoke:transcription": "node --import tsx scripts/transcription-smoke.ts",
-    "smoke:speech": "node --import tsx scripts/speech-smoke.ts"
+    "smoke:speech": "node --import tsx scripts/speech-smoke.ts",
+    "nigma:hermes-decision": "node --import tsx scripts/hermes-decision-adapter.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",
@@ -28,6 +30,7 @@
     "express": "^4.21.2",
     "firebase-admin": "^14.2.0",
     "lucide-react": "^0.546.0",
+    "mammoth": "^1.12.1",
     "motion": "^12.23.24",
     "pdf-parse": "^2.4.5",
     "react": "^19.0.1",
@@ -41,6 +44,7 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "jszip": "^3.10.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
