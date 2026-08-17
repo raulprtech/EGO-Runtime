@@ -269,3 +269,8 @@ The endpoint uses ordinary runtime authentication because ARIA is the authentica
 This endpoint is not suitable for public or multiuser deployment without a distinct interface identity and durable session binding. It never applies to external side effects, accounts, network publication, purchases or destructive operations. Those retain the separate human-decision credential and exact scoped approval flow.
 
 For local self-routing, copy config/nigma-host-routes.example.json to an ignored config/*.local.json file, set its loopback port to the active EGO port, and configure NIGMA_HOST_ROUTES_FILE plus NIGMA_RUNTIME_TOKEN_EGO. NIGMA_HANDOFF_ENABLED=true still requires the explicit NIGMA_ADAPTER_POLICY_FILE allowlist.
+
+
+## Authenticated educational request execution (G1.26)
+
+POST /v1/runtime/nigma/educational-tasks/execute-requested lets the authenticated local ARIA boundary treat the original low/medium-risk, local read-only educational instruction as authority for immediate execution. The exact turn content must hash to the objective sealed during preparation; altered, assistant-authored, expired or mismatched requests fail closed. Approval remains an exact Nigma approval and execution remains idempotent. This shortcut never applies to external accounts, network side effects, publication, purchases, destructive work or capabilities outside the existing educational_execution allowlist. The earlier confirm-and-execute endpoint remains available for clients that require a separate confirmation turn.

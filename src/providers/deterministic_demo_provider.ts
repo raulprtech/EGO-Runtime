@@ -67,11 +67,14 @@ function documentAnalysis(prompt: string) {
 
 function learningPlan(prompt: string) {
   const objective = section(prompt, 'Learning objective:', '\n\nExtracted source material:');
+  const spanish = /[áéíóúñ¿¡]|\b(crea|crear|estudio|preguntas|plan|resume|explica|documento|aprende)\b/iu.test(objective);
   const labels = conceptsFromMaterial(section(prompt, 'Extracted source material:'));
-  const concepts = labels.length ? labels : ['Main source idea'];
+  const concepts = labels.length ? labels : [spanish ? 'Idea principal del material' : 'Main source idea'];
   return {
-    learning_objective: objective || 'Understand the referenced material',
-    sub_objectives: concepts.map(label => `Explain ${label} without consulting the source`),
+    learning_objective: objective || (spanish ? 'Comprender el material proporcionado' : 'Understand the referenced material'),
+    sub_objectives: concepts.map(label => spanish
+      ? `Explicar ${label} sin consultar la fuente`
+      : `Explain ${label} without consulting the source`),
     required_concepts: concepts,
     dependencies: concepts.slice(1).map((label, index) => `${concepts[index]} -> ${label}`),
     estimated_difficulty: concepts.length > 4 ? 'intermediate' : 'introductory',
@@ -80,12 +83,20 @@ function learningPlan(prompt: string) {
       topic: label,
       duration_minutes: 25,
       technique: index === 0 ? 'feynman' : index === 1 ? 'flashcards' : 'quiz',
-      activities: [`Review the source section for ${label}`, `Explain ${label} in your own words`],
-      completion_criteria: [`Produce one source-grounded explanation of ${label}`],
+      activities: spanish
+        ? [`Revisar en la fuente la sección sobre ${label}`, `Explicar ${label} con tus propias palabras`]
+        : [`Review the source section for ${label}`, `Explain ${label} in your own words`],
+      completion_criteria: [spanish
+        ? `Producir una explicación de ${label} fundamentada en la fuente`
+        : `Produce one source-grounded explanation of ${label}`],
     })),
     review_cadence_days: [1, 3, 7],
-    mastery_criteria: ['Explain every selected concept without notes', 'Reach at least 80% on retrieval questions'],
-    deliverables: ['Feynman explanation', 'Completed retrieval practice'],
+    mastery_criteria: spanish
+      ? ['Explicar cada concepto seleccionado sin consultar notas', 'Alcanzar al menos 80% en las preguntas de recuperación']
+      : ['Explain every selected concept without notes', 'Reach at least 80% on retrieval questions'],
+    deliverables: spanish
+      ? ['Explicación Feynman', 'Práctica de recuperación completada']
+      : ['Feynman explanation', 'Completed retrieval practice'],
   };
 }
 

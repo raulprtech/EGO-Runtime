@@ -121,3 +121,5 @@ F5.3 adds local cooperative cancellation for sealed Nigma invocations. EGO repor
 ## License
 
 Apache-2.0.
+
+G1.26 allows the original authenticated educational instruction to execute an already prepared low/medium-risk, local read-only plan in one turn. It binds the exact objective hash, preserves Nigma approval and idempotency, and returns a verified same-language study plan. No external or destructive authority is added. See [the G1.26 result](docs/g1.26-single-turn-educational-execution-result-2026-08-17.md).

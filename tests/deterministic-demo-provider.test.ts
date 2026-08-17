@@ -48,6 +48,18 @@ describe('deterministic demo provider', () => {
     expect(assessment.calibration_version).toBe('deterministic-bilingual-v1');
   });
 
+  it('keeps a Spanish learning plan in Spanish', async () => {
+    process.env.MODEL_PROVIDER = 'deterministic-demo';
+    const material = '## Source source_1: leccion.md\n# Fotosíntesis\nLas plantas transforman luz en energía almacenada.';
+    const plan = await new PlannerAgent().buildStudyPlan(
+      'Crea un plan para estudiar la fotosíntesis', material, 'learner_es',
+    );
+    const visible = JSON.stringify(plan);
+    expect(visible).toContain('Explicar');
+    expect(visible).toContain('Revisar en la fuente');
+    expect(visible).not.toMatch(/Review the source|Explain .* in your own words|without notes/);
+  });
+
   it('matches the versioned bilingual calibration cases with explicit reasons', async () => {
     process.env.MODEL_PROVIDER = 'deterministic-demo';
     const cases = JSON.parse(await fs.readFile(
